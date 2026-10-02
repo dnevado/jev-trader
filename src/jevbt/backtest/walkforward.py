@@ -22,16 +22,25 @@ from jevbt.backtest.metrics import summarize
 from jevbt.strategy import BaselineStrategy, JevRules, JevStrategy
 
 
-def default_grid() -> list[JevRules]:
-    combos = itertools.product(
-        ["action", "signals"],   # entry_mode
-        [0.60, 0.75],            # min_trend_up
-        [0.40, 0.60],            # max_overbought
-        [1.0, 1.5],              # min_quality
-        [0.30, 0.50],            # exit_trend_up
-    )
-    return [JevRules(entry_mode=m, min_trend_up=t, max_overbought=o, min_quality=q, exit_trend_up=x)
-            for m, t, o, q, x in combos]
+GRID: dict[str, list] = {
+    "entry_mode": ["action", "signals"],
+    "min_trend_up": [0.60, 0.75],
+    "max_overbought": [0.40, 0.60],
+    "min_quality": [1.0, 1.5],
+    "exit_trend_up": [0.30, 0.50],
+}
+
+
+def default_grid(**fixed) -> list[JevRules]:
+    """32 rule sets; `fixed` sets JevRules fields for all of them (e.g. use_overbought=False, min_quality=0.0),
+    replacing that grid dimension if it is one. Duplicates are dropped (max_overbought is irrelevant without
+    the overbought gate)."""
+    dims = {k: [fixed[k]] if k in fixed else v for k, v in GRID.items()}
+    if not fixed.get("use_overbought", True):
+        dims["max_overbought"] = [1.0]
+    rest = {k: v for k, v in fixed.items() if k not in GRID}
+    grid = [JevRules(**dict(zip(dims, combo)), **rest) for combo in itertools.product(*dims.values())]
+    return list(dict.fromkeys(grid))
 
 
 def make_folds(start, end, train_months: int, test_months: int) -> list[tuple[pd.Timestamp, ...]]:
@@ -71,7 +80,8 @@ class WalkForwardResult:
         rows = []
         for f in self.folds:
             rows.append({"test": f"{f.test_start:%Y-%m-%d}..{f.test_end:%Y-%m-%d}",
-                         **{k: v for k, v in asdict(f.rules).items() if k not in ("min_confidence", "valuation_penalty")},
+                         **{k: v for k, v in asdict(f.rules).items()
+                            if k not in ("min_confidence", "valuation_penalty", "use_overbought", "sell_veto", "exit_on_sell")},
                          "train_sharpe": f.train_sharpe, "train_trades": f.train_trades, "test_return": f.test["total_return"],
                          "test_trades": f.test["trades"]})
         return pd.DataFrame(rows)

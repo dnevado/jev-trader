@@ -49,6 +49,9 @@ class JevRules:
                   size = p(buy) × (1 − penalty × valuation_risk).
       "signals" — entry from the Noul/Score answers only (trend, overbought, quality), vetoed by action == sell;
                   size = trend_up × (1 − penalty × valuation_risk). Jev's action is still used to exit.
+    use_overbought — require overbought < max_overbought to enter (an RSI-like gate that blocks strong trends).
+    sell_veto      — "signals" mode: no entry while action == sell.
+    exit_on_sell   — exit a held position when action == sell (besides trend_up < exit_trend_up).
     """
 
     entry_mode: Literal["action", "signals"] = "action"
@@ -58,6 +61,9 @@ class JevRules:
     min_quality: float = 1.5      # expected Score level: 0 weak, 1 medium, 2 strong
     exit_trend_up: float = 0.40
     valuation_penalty: float = 0.5
+    use_overbought: bool = True
+    sell_veto: bool = True
+    exit_on_sell: bool = True
 
 
 class JevStrategy:
@@ -89,16 +95,17 @@ class JevStrategy:
         r = self.rules
         log = {"state": out["state_text"], "jev": d.model_dump(), "rules": asdict(r)}
         if current_weight > 0:
-            if d.action == "sell" or d.trend_up < r.exit_trend_up:
+            if (r.exit_on_sell and d.action == "sell") or d.trend_up < r.exit_trend_up:
                 return 0.0, {**log, "reason": "exit"}
             return current_weight, {**log, "reason": "hold"}
-        signals_ok = (d.trend_up >= r.min_trend_up and d.overbought < r.max_overbought
+        signals_ok = (d.trend_up >= r.min_trend_up
+                      and (not r.use_overbought or d.overbought < r.max_overbought)
                       and d.fundamental_quality >= r.min_quality)
         if r.entry_mode == "action":
             if signals_ok and d.action == "buy" and d.action_confidence >= r.min_confidence:
                 size = d.p_buy * (1 - r.valuation_penalty * d.valuation_risk)
                 return size * self.max_alloc, {**log, "reason": "entry"}
-        elif signals_ok and d.action != "sell":
+        elif signals_ok and not (r.sell_veto and d.action == "sell"):
             size = d.trend_up * (1 - r.valuation_penalty * d.valuation_risk)
             return size * self.max_alloc, {**log, "reason": "entry"}
         return 0.0, {**log, "reason": "no entry"}

@@ -211,3 +211,45 @@ def test_rank_prefers_enough_trades_over_lucky_sharpe():
     assert _rank(better, 10) > _rank(active, 10)
     # Nobody reaches the minimum → the most active wins; a flat rule set is last.
     assert _rank({"sharpe": 0.1, "trades": 6}, 10) > _rank(lucky, 10) > _rank(flat, 10)
+
+
+def test_overbought_gate_and_sell_flags():
+    from types import SimpleNamespace
+
+    class OneShotGraph:
+        def __init__(self, **answers):
+            self.answers = answers
+
+        def invoke(self, state):
+            d = SimpleNamespace(trend_up=0.9, overbought=0.9, fundamental_quality=2.0, valuation_risk=0.0,
+                                action="sell", action_confidence=0.5, p_buy=0.1)
+            d.__dict__.update(self.answers)
+            d.model_dump = lambda: dict(d.__dict__)
+            return {"decision": d, "state_text": "s"}
+
+    tech = pd.Series({"sma200": 1.0})
+    t = pd.Timestamp("2024-01-08")
+
+    def target(graph, weight=0.0, **flags):
+        return JevStrategy(graph, {"X": None}, JevRules(entry_mode="signals", **flags), max_alloc=1.0).target(
+            "X", t, tech, weight)[0]
+
+    overbought_sell = OneShotGraph()
+    assert target(overbought_sell) == 0.0                                       # both gates block
+    assert target(overbought_sell, use_overbought=False) == 0.0                 # sell veto still blocks
+    assert target(overbought_sell, sell_veto=False) == 0.0                      # overbought still blocks
+    assert target(overbought_sell, use_overbought=False, sell_veto=False) == pytest.approx(0.9)
+    assert target(overbought_sell, weight=0.5) == 0.0                           # exit on sell
+    assert target(overbought_sell, weight=0.5, exit_on_sell=False) == 0.5       # hold instead
+
+
+def test_default_grid_without_overbought_drops_duplicates():
+    grid = default_grid(use_overbought=False, sell_veto=False)
+    assert len(grid) == 16 and len(default_grid()) == 32
+    assert all(not r.use_overbought and not r.sell_veto for r in grid)
+
+
+def test_default_grid_fixed_values_replace_dimensions():
+    grid = default_grid(min_quality=0.0, valuation_penalty=0.0)
+    assert len(grid) == 16
+    assert {r.min_quality for r in grid} == {0.0} and {r.valuation_penalty for r in grid} == {0.0}

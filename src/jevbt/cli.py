@@ -48,8 +48,20 @@ def _ingest(args: argparse.Namespace) -> int:
     return status
 
 
+def _rule_flags(args: argparse.Namespace) -> dict:
+    """JevRules overrides from --no-overbought / --no-sell-veto / --no-exit-on-sell / --min-quality /
+    --valuation-penalty (the last two fix the value for every rule set of the walk-forward grid)."""
+    flags = {"use_overbought": not getattr(args, "no_overbought", False),
+             "sell_veto": not getattr(args, "no_sell_veto", False),
+             "exit_on_sell": not getattr(args, "no_exit_on_sell", False)}
+    for name in ("min_quality", "valuation_penalty"):
+        if getattr(args, name, None) is not None:
+            flags[name] = getattr(args, name)
+    return flags
+
+
 def _jev_strategy(settings: Settings, client: FMPClient, tickers: list[str], offline: bool, max_alloc: float,
-                  entry_mode: str = "action"):
+                  entry_mode: str = "action", flags: dict | None = None):
     from jevbt.decision.jev import JevDecider, MockJevClassifier, typesafe_classifier
     from jevbt.features.fundamentals import compute_ratios
     from jevbt.graph import build_graph
@@ -69,7 +81,8 @@ def _jev_strategy(settings: Settings, client: FMPClient, tickers: list[str], off
                                 settings.cache_dir)
         decider = JevDecider(typesafe_classifier(settings.jev_model, settings.typesafe_api_key,
                                                  settings.typesafe_base_url), settings.cache_dir)
-    strategy = JevStrategy(build_graph(summarizer, decider), ratios, JevRules(entry_mode=entry_mode), max_alloc)
+    strategy = JevStrategy(build_graph(summarizer, decider), ratios, JevRules(entry_mode=entry_mode, **(flags or {})),
+                           max_alloc)
     return strategy, summarizer, decider
 
 
@@ -86,7 +99,8 @@ def _load(args: argparse.Namespace, jev: bool):
             prices[tk] = prices_client.prices(tk, warm_start, args.end)
         except AlpacaError as e:
             raise type(e)(f"{tk}: {e}") from None
-    parts =(_jev_strategy(settings, client, tickers, args.offline, max_alloc, getattr(args, "entry_mode", "action"))
+    parts = (_jev_strategy(settings, client, tickers, args.offline, max_alloc, getattr(args, "entry_mode", "action"),
+                           _rule_flags(args))
              if jev else (None, None, None))
     return settings, tickers, max_alloc, prices, parts
 
@@ -141,14 +155,15 @@ def _backtest(args: argparse.Namespace) -> int:
 def _walkforward(args: argparse.Namespace) -> int:
     from jevbt.backtest.engine import buy_and_hold
     from jevbt.backtest.metrics import summarize
-    from jevbt.backtest.walkforward import walk_forward
+    from jevbt.backtest.walkforward import default_grid, walk_forward
 
     try:
         settings, tickers, max_alloc, prices, (strategy, summarizer, decider) = _load(args, True)
     except (FMPError, AlpacaError) as e:
         print(e, file=sys.stderr)
         return 1
-    wf = walk_forward(prices, strategy, args.start, args.end, train_months=args.train_months,
+    flags = _rule_flags(args)
+    wf = walk_forward(prices, strategy, args.start, args.end, grid=default_grid(**flags), train_months=args.train_months,
                       test_months=args.test_months, cost_bps=args.cost_bps, min_trades=args.min_trades)
     oos_start, oos_end = wf.equity.index[0], wf.equity.index[-1]
     metrics = {
@@ -165,6 +180,7 @@ def _walkforward(args: argparse.Namespace) -> int:
         {"tickers": tickers, "start": args.start, "end": args.end,
          "out_of_sample": [str(oos_start.date()), str(oos_end.date())],
          "train_months": args.train_months, "test_months": args.test_months, "min_trades": args.min_trades,
+         "rule_flags": flags,
          "max_alloc": max_alloc,
          "cost_bps": args.cost_bps, "offline": args.offline, "metrics": metrics}, indent=2))
     with pd.option_context("display.width", 220):
@@ -229,6 +245,13 @@ def main(argv: list[str] | None = None) -> int:
                            help="min trades in a train window for a rule set to be eligible (default 2 per ticker)")
         if name != "baseline":
             p.add_argument("--offline", action="store_true", help="mock OpenAI and Jev (no paid calls)")
+            p.add_argument("--no-overbought", action="store_true", help="ignore Jev's overbought answer on entry")
+            p.add_argument("--no-sell-veto", action="store_true", help="allow entries while Jev's action is sell")
+            p.add_argument("--no-exit-on-sell", action="store_true", help="do not exit on Jev's action == sell")
+            p.add_argument("--min-quality", type=float, default=None,
+                           help="min expected fundamental_quality to enter (0 = no quality filter)")
+            p.add_argument("--valuation-penalty", type=float, default=None,
+                           help="size × (1 − penalty × valuation_risk); 0 = size by trend_up / p(buy) only")
 
     research = sub.add_parser("research", help="research agent (OpenAI + FMP MCP) that proposes tickers")
     research.add_argument("criteria", help="what kind of companies to look for")
