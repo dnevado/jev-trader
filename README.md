@@ -1,6 +1,6 @@
 # jev-backtest
 
-Backtesting of US stock strategies: pandas technical indicators, OpenAI fundamentals summaries and Jev (TypeSafe AI) decisions.
+Backtesting of US stock strategies (prices from Alpaca, fundamentals from FMP): pandas technical indicators, OpenAI fundamentals summaries and Jev (TypeSafe AI) decisions.
 Design and decisions: [CLAUDE.md](CLAUDE.md). Verified FMP endpoints and free-plan limits: [docs/fmp_endpoints.md](docs/fmp_endpoints.md).
 
 ## Setup (PowerShell)
@@ -8,7 +8,7 @@ Design and decisions: [CLAUDE.md](CLAUDE.md). Verified FMP endpoints and free-pl
 ```powershell
 uv venv --python 3.12 .venv
 uv pip install --python .venv -r requirements.txt -e .
-Copy-Item .env.example .env   # fill FMP_API_KEY (a parent-folder .env is also picked up)
+Copy-Item .env.example .env   # fill ALPACA_API_KEY_ID/SECRET_KEY and FMP_API_KEY (a parent-folder .env is also picked up)
 ```
 
 ## Usage
@@ -30,8 +30,10 @@ Each backtest writes `data/runs/<timestamp>_<strategy>/`: `metrics.json`, `equit
 `decisions.jsonl` (state sent to Jev, its answers and the resulting order). OpenAI summaries and Jev answers
 are cached in `data/cache/`, so re-running the same backtest costs nothing.
 
-Data is cached in `data/raw/` (Parquet). Cached ranges never hit the network; the daily request
-counter lives in `data/raw/_budget.json` (`FMP_DAILY_BUDGET`, default 240 of the 250 free requests).
+Data is cached in `data/raw/` (Parquet). Cached ranges never hit the network.
+- Prices: Alpaca daily bars, split-adjusted, in `data/raw/prices_alpaca/<feed>/` (free plan: 200 requests/min).
+- Statements: FMP; the daily request counter lives in `data/raw/_budget.json` (`FMP_DAILY_BUDGET`, default 240
+  of the 250 free requests). The old FMP price cache (`data/raw/prices/`) is no longer used and can be deleted.
 
 ## Stock discovery UI (React)
 

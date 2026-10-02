@@ -18,17 +18,19 @@ from pathlib import Path
 import pandas as pd
 
 from jevbt.config import Settings, load_settings
+from jevbt.ingest.alpaca import AlpacaClient, AlpacaError, AlpacaPlanError
 from jevbt.ingest.fmp import STATEMENT_PATHS, FMPClient, FMPError, FMPPlanError
 
 WARMUP_DAYS = 400  # > 252 sessions for 12-month momentum and SMA200
 
 
 def _ingest(args: argparse.Namespace) -> int:
-    client = FMPClient(load_settings())
+    settings = load_settings()
+    client, prices_client = FMPClient(settings), AlpacaClient(settings)
     status = 0
     for ticker in args.tickers:
         try:
-            px = client.prices(ticker, args.start, args.end, refresh=args.refresh)
+            px = prices_client.prices(ticker, args.start, args.end, refresh=args.refresh)
             print(f"{ticker}: {len(px)} price rows ({px.index.min():%Y-%m-%d} .. {px.index.max():%Y-%m-%d})"
                   if len(px) else f"{ticker}: no price rows")
             for kind in STATEMENT_PATHS:
@@ -37,7 +39,10 @@ def _ingest(args: argparse.Namespace) -> int:
         except FMPPlanError as e:
             print(f"{ticker}: not available on the current FMP plan: {e}", file=sys.stderr)
             status = 1
-        except FMPError as e:
+        except AlpacaPlanError as e:
+            print(f"{ticker}: Alpaca credentials or plan rejected the request: {e}", file=sys.stderr)
+            status = 1
+        except (FMPError, AlpacaError) as e:
             print(f"{ticker}: {e}", file=sys.stderr)
             status = 1
     return status
@@ -69,17 +74,17 @@ def _jev_strategy(settings: Settings, client: FMPClient, tickers: list[str], off
 
 
 def _load(args: argparse.Namespace, jev: bool):
-    """Prices with warm-up (+ Jev strategy) for the requested tickers, from the FMP cache when possible."""
+    """Prices (Alpaca) with warm-up (+ Jev strategy, FMP statements) for the requested tickers, cached when possible."""
     settings = load_settings()
-    client = FMPClient(settings)
+    client, prices_client = FMPClient(settings), AlpacaClient(settings)
     tickers = [t.upper() for t in args.tickers]
     max_alloc = args.max_alloc or 1 / len(tickers)
     warm_start = (pd.Timestamp(args.start) - pd.Timedelta(days=WARMUP_DAYS)).date()
     prices = {}
     for tk in tickers:
         try:
-            prices[tk] = client.prices(tk, warm_start, args.end)
-        except FMPError as e:
+            prices[tk] = prices_client.prices(tk, warm_start, args.end)
+        except AlpacaError as e:
             raise type(e)(f"{tk}: {e}") from None
     parts =(_jev_strategy(settings, client, tickers, args.offline, max_alloc, getattr(args, "entry_mode", "action"))
              if jev else (None, None, None))
@@ -103,7 +108,7 @@ def _backtest(args: argparse.Namespace) -> int:
 
     try:
         settings, tickers, max_alloc, prices, (strategy, summarizer, decider) = _load(args, args.strategy == "jev")
-    except FMPError as e:
+    except (FMPError, AlpacaError) as e:
         print(e, file=sys.stderr)
         return 1
     if strategy is None:
@@ -140,7 +145,7 @@ def _walkforward(args: argparse.Namespace) -> int:
 
     try:
         settings, tickers, max_alloc, prices, (strategy, summarizer, decider) = _load(args, True)
-    except FMPError as e:
+    except (FMPError, AlpacaError) as e:
         print(e, file=sys.stderr)
         return 1
     wf = walk_forward(prices, strategy, args.start, args.end, train_months=args.train_months,
@@ -198,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="jevbt")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ingest = sub.add_parser("ingest", help="download prices and statements from FMP into the Parquet cache")
+    ingest = sub.add_parser("ingest", help="download prices (Alpaca) and statements (FMP) into the Parquet cache")
     ingest.add_argument("--tickers", nargs="+", required=True)
     ingest.add_argument("--start", required=True)
     ingest.add_argument("--end", required=True)

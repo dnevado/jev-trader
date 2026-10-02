@@ -1,4 +1,5 @@
-"""FMP "stable" REST client with a local Parquet cache.
+"""FMP "stable" REST client (fundamentals: statements, transcripts) with a local Parquet cache.
+Prices come from Alpaca (ingest/alpaca.py).
 
 Endpoints and field names are the ones verified in docs/fmp_endpoints.md.
 Every request goes through a daily budget counter; cached data never hits the network.
@@ -7,22 +8,20 @@ Every request goes through a daily budget counter; cached data never hits the ne
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
-from datetime import date, timedelta
-from pathlib import Path
+from datetime import date
 from typing import Callable, Literal
 
 import pandas as pd
 import requests
 
 from jevbt.config import Settings
+from jevbt.ingest.cache import write_parquet
 
 StatementKind = Literal["income", "balance", "cashflow"]
 Period = Literal["quarter", "annual"]
 
-PRICES_PATH = "historical-price-eod/full"
 STATEMENT_PATHS: dict[str, str] = {
     "income": "income-statement",
     "balance": "balance-sheet-statement",
@@ -65,13 +64,6 @@ def normalize(records: list[dict]) -> pd.DataFrame:
     return df
 
 
-def _write_parquet(df: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    df.to_parquet(tmp, index=False)
-    os.replace(tmp, path)
-
-
 class FMPClient:
     def __init__(
         self,
@@ -89,49 +81,6 @@ class FMPClient:
         self.raw_dir = settings.raw_dir
 
     # ---------- public API ----------
-
-    def prices(self, symbol: str, start: str | date, end: str | date, refresh: bool = False) -> pd.DataFrame:
-        """Daily split-adjusted OHLCV in [start, end], indexed by date."""
-        symbol = symbol.upper()
-        start = pd.Timestamp(start).date()
-        # Never mark today or the future as covered: today's bar may still be incomplete.
-        end = min(pd.Timestamp(end).date(), self._today() - timedelta(days=1))
-        if end < start:
-            raise ValueError(f"empty range: {start} .. {end}")
-        path = self.raw_dir / "prices" / f"{symbol}.parquet"
-        meta_path = path.with_suffix(".meta.json")
-
-        cached = pd.read_parquet(path) if path.exists() and not refresh else None
-        covered = json.loads(meta_path.read_text()) if cached is not None and meta_path.exists() else None
-
-        if covered is None:
-            missing = [(start, end)]
-            cov_start, cov_end = start, end
-        else:
-            cov_start = date.fromisoformat(covered["start"])
-            cov_end = date.fromisoformat(covered["end"])
-            missing = []
-            if start < cov_start:
-                missing.append((start, cov_start - timedelta(days=1)))
-            if end > cov_end:
-                missing.append((cov_end + timedelta(days=1), end))
-            cov_start, cov_end = min(start, cov_start), max(end, cov_end)
-
-        if missing:
-            frames = [] if cached is None else [cached]
-            for a, b in missing:
-                frames.append(normalize(self._get(PRICES_PATH, {"symbol": symbol, "from": a.isoformat(), "to": b.isoformat()})))
-            frames = [f for f in frames if not f.empty]
-            merged = (
-                pd.concat(frames, ignore_index=True).drop_duplicates("date", keep="last").sort_values("date")
-                if frames else pd.DataFrame(columns=["date"])
-            )
-            _write_parquet(merged.reset_index(drop=True), path)
-            meta_path.write_text(json.dumps({"start": cov_start.isoformat(), "end": cov_end.isoformat()}))
-            cached = merged
-
-        df = cached.set_index("date")
-        return df.loc[pd.Timestamp(start):pd.Timestamp(end)]
 
     def statements(self, symbol: str, kind: StatementKind, period: Period = "quarter",
                    refresh: bool = False) -> pd.DataFrame:
@@ -156,7 +105,7 @@ class FMPClient:
                 .reset_index(drop=True)
                 if frames else fresh
             )
-            _write_parquet(merged, path)
+            write_parquet(merged, path)
             cached = merged
         return cached.set_index("date") if "date" in cached.columns else cached
 
@@ -167,7 +116,7 @@ class FMPClient:
         if path.exists() and not refresh:
             return pd.read_parquet(path)
         df = normalize(self._get(TRANSCRIPT_DATES_PATH, {"symbol": symbol}))
-        _write_parquet(df, path)
+        write_parquet(df, path)
         return df
 
     def transcript(self, symbol: str, year: int, quarter: int) -> pd.DataFrame:
@@ -177,7 +126,7 @@ class FMPClient:
         if path.exists():
             return pd.read_parquet(path)
         df = normalize(self._get(TRANSCRIPT_PATH, {"symbol": symbol, "year": year, "quarter": quarter}))
-        _write_parquet(df, path)
+        write_parquet(df, path)
         return df
 
     # ---------- internals ----------

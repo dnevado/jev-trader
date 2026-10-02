@@ -11,9 +11,16 @@ Working language with the user: **English**. User environment: **Windows** (Powe
 
 ## 1. Architecture decisions (already made)
 
-1. **Data ingestion: direct FMP REST API, NOT MCP.**
-   The backtest needs bulk, deterministic and reproducible downloads. Cached locally as Parquet.
-   FMP free plan: 250 requests/day, 5 years of data, US exchanges only → caching is mandatory.
+1. **Data ingestion: direct REST APIs, NOT MCP.** The backtest needs bulk, deterministic and reproducible
+   downloads. Everything is cached locally as Parquet.
+   - **Stock prices (daily OHLCV bars): Alpaca Market Data API v2** (`https://data.alpaca.markets/v2/stocks/bars`,
+     `timeframe=1Day`, `adjustment=split`, paginate with `next_page_token`). Auth headers
+     `APCA-API-KEY-ID` / `APCA-API-SECRET-KEY`. Free (Basic) plan: 200 requests/min, history since 2016.
+     Default `feed=sip` (consolidated tape; the free plan only blocks SIP data < 15 min old, and we never ask
+     for today's bar); `iex` is IEX-only volume/prices. Keep the feed fixed for reproducibility (it is part of
+     the cache path).
+   - **Fundamentals (financial statements, company profile/peers): FMP REST** (Alpaca has no fundamentals).
+     FMP free plan: 250 requests/day, 5 years of data, US exchanges only → caching is mandatory.
 2. **FMP MCP only in "research" mode** (separate from the backtest): LangGraph + OpenAI (full model) agent
    with the official MCP tools (`https://financialmodelingprep.com/mcp?apikey=...`)
    via `langchain-mcp-adapters`, to propose the ticker universe. Never inside the backtest
@@ -53,7 +60,7 @@ Working language with the user: **English**. User environment: **Windows** (Powe
 │ GPT (full) + FMP MCP → tickers  │
 └─────────────────────────────────┘
                 ▼
-FMP REST ──► data/raw/*.parquet (cache)
+Alpaca REST (prices) + FMP REST (statements) ──► data/raw/*.parquet (cache)
                 │
    for each (ticker, rebalance date t):
    ├─ technical indicators (pandas, data ≤ t-1)
@@ -68,7 +75,10 @@ FMP REST ──► data/raw/*.parquet (cache)
 ## 3. Configuration (.env)
 
 ```
-FMP_API_KEY=...
+ALPACA_API_KEY_ID=...
+ALPACA_API_SECRET_KEY=...
+ALPACA_DATA_FEED=sip              # sip (consolidated, >15 min old on free plan) | iex
+FMP_API_KEY=...                   # fundamentals only
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL_FAST=gpt-4.1-mini
 OPENAI_MODEL_FULL=gpt-4.1
@@ -154,7 +164,9 @@ jev-backtest/
   CLAUDE.md  README.md  requirements.txt  .env.example
   src/jevbt/
     config.py
-    ingest/fmp.py            # REST + Parquet cache; normalizes column names
+    ingest/cache.py          # shared Parquet helpers (date-range cache with covered-range meta)
+    ingest/alpaca.py         # daily price bars (Alpaca REST) + Parquet cache in data/raw/prices_alpaca/<feed>/
+    ingest/fmp.py            # statements/profile (FMP REST) + Parquet cache; normalizes column names
     features/technical.py    # pandas indicators
     features/fundamentals.py # point_in_time(), compute_ratios(), build_user_prompt()
     llm/summarizer.py        # ChatOpenAI (mini), cached per (ticker, filing)
@@ -177,8 +189,13 @@ jev-backtest/
    - Statements: only the **latest 5 periods** (`limit > 5` → HTTP 402; `page` is ignored) → 5 quarters
      (currently from mid-2025) or 5 fiscal years. The cache merges refreshes, so quarters accumulate over time.
    - Earnings-call transcripts (`earning-call-transcript`, `-dates`): **not available** (HTTP 402).
-   - EOD prices OK and **split-adjusted** (not dividend-adjusted); statements are restated for splits too, so
-     `close / eps_diluted` is consistent. `acceptedDate` (with time) is the publication date (`acceptedDate < t`).
+   - EOD prices were split-adjusted (not dividend-adjusted). **Prices now come from Alpaca** with
+     `adjustment=split` to keep the same convention: statements are restated for splits too, so
+     `close / eps_diluted` stays consistent. `acceptedDate` (with time) is the publication date (`acceptedDate < t`).
+   - **Done 2026-10-02: price ingestion migrated to `ingest/alpaca.py`** (CLI `ingest`/`baseline`/`backtest`/
+     `walkforward`). `FMPClient.prices` removed (FMP is fundamentals only). Results in item 5 below were computed with
+     FMP prices; re-runs with Alpaca bars change the technical features in the Jev state → Jev cache misses
+     → those calls are paid again.
 2. ~~Implement the structure in §7, with offline tests~~ **Phase 1 done**: `ingest/fmp.py` (Parquet cache,
    daily budget counter), `features/technical.py`, offline tests; other modules are stubs.
 3. ~~Decide the fundamentals source~~ **Decided: annual statements** (free FMP plan, last 5 fiscal years).
@@ -195,7 +212,7 @@ jev-backtest/
    AMZN out-of-sample 2024-01..2026-09: Jev −15.4% (Sharpe −0.62, max DD −24%), baseline −19.8% (Sharpe −0.18,
    max DD −40%), buy & hold +66.5% (Sharpe 0.74). The grid picks `signals` in 10/11 folds.
    → On AMZN, Jev does not beat the baseline on Sharpe (only on drawdown) and both lose to buy & hold.
-   5 tickers (AMZN MSFT AAPL GOOGL NVDA; ORCL prices are 402 on the free plan), OOS 2024-01..2026-09:
+   5 tickers (AMZN MSFT AAPL GOOGL NVDA; ORCL prices were 402 on the FMP free plan — no longer an issue with Alpaca), OOS 2024-01..2026-09:
    Jev +14.9% (Sharpe 1.00, max DD −5.2%, 102 trades, hit 43%), baseline +61.7% (Sharpe 1.05, max DD −18.2%),
    buy & hold +140.5% (Sharpe 1.34, max DD −28.7%). Tickers picked today → hindsight bias favours buy & hold.
    Weakness found: the last 4 folds picked `action` rules with train Sharpe 2.70 from very few trades and then
@@ -217,4 +234,4 @@ jev-backtest/
 
 - Windows: use `pathlib`, no hard-coded `/` paths; PowerShell commands in the README.
 - Never commit `.env` or `data/`.
-- Every paid call (OpenAI, Jev, FMP) goes through the disk cache.
+- Every paid/rate-limited call (OpenAI, Jev, FMP, Alpaca) goes through the disk cache.

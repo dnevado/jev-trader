@@ -12,6 +12,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseModel):
+    alpaca_api_key_id: str = ""
+    alpaca_api_secret_key: str = ""
+    alpaca_data_url: str = "https://data.alpaca.markets"
+    # sip = consolidated tape (free plan: only data older than 15 min, fine for past daily bars); iex = IEX only.
+    alpaca_feed: str = "sip"
     fmp_api_key: str = ""
     fmp_base_url: str = "https://financialmodelingprep.com/stable"
     fmp_daily_budget: int = 240
@@ -39,6 +44,11 @@ class Settings(BaseModel):
 def load_settings() -> Settings:
     load_dotenv(find_dotenv(usecwd=True))
     env = {
+        # Alpaca's own SDKs read APCA_API_KEY_ID / APCA_API_SECRET_KEY: accept those too.
+        "alpaca_api_key_id": os.getenv("ALPACA_API_KEY_ID") or os.getenv("APCA_API_KEY_ID"),
+        "alpaca_api_secret_key": os.getenv("ALPACA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY"),
+        "alpaca_data_url": os.getenv("ALPACA_DATA_URL"),
+        "alpaca_feed": os.getenv("ALPACA_DATA_FEED"),
         "fmp_api_key": os.getenv("FMP_API_KEY"),
         "fmp_base_url": os.getenv("FMP_BASE_URL"),
         "fmp_daily_budget": os.getenv("FMP_DAILY_BUDGET"),

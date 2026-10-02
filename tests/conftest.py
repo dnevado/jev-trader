@@ -46,16 +46,20 @@ class FakeSession:
     def __init__(self, handler):
         self.handler = handler
         self.calls: list[tuple[str, dict]] = []
+        self.headers: list[dict] = []
 
-    def get(self, url, params=None, timeout=None):
-        path = url.split("/stable/", 1)[1]
+    def get(self, url, params=None, headers=None, timeout=None):
+        # FMP: path after /stable/; Alpaca: path after the host (v2/stocks/...).
+        path = url.split("/stable/", 1)[1] if "/stable/" in url else url.split("://", 1)[1].split("/", 1)[1]
         self.calls.append((path, dict(params or {})))
+        self.headers.append(dict(headers or {}))
         return self.handler(path, params or {})
 
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    return Settings(fmp_api_key=API_KEY, data_dir=tmp_path / "data", fmp_daily_budget=50)
+    return Settings(fmp_api_key=API_KEY, alpaca_api_key_id="test-key-id", alpaca_api_secret_key=API_KEY,
+                    data_dir=tmp_path / "data", fmp_daily_budget=50)
 
 
 FIXED_TODAY = date(2026, 9, 27)
