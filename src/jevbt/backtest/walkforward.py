@@ -81,7 +81,8 @@ class WalkForwardResult:
         for f in self.folds:
             rows.append({"test": f"{f.test_start:%Y-%m-%d}..{f.test_end:%Y-%m-%d}",
                          **{k: v for k, v in asdict(f.rules).items()
-                            if k not in ("min_confidence", "valuation_penalty", "use_overbought", "sell_veto", "exit_on_sell")},
+                            if k not in ("min_confidence", "valuation_penalty", "use_overbought", "sell_veto",
+                                         "exit_on_sell", "direction")},
                          "train_sharpe": f.train_sharpe, "train_trades": f.train_trades, "test_return": f.test["total_return"],
                          "test_trades": f.test["trades"]})
         return pd.DataFrame(rows)
@@ -99,26 +100,35 @@ def _rank(metrics: dict, min_trades: int) -> tuple:
 
 def walk_forward(prices: dict[str, pd.DataFrame], strategy: JevStrategy, start, end, grid: list[JevRules] | None = None,
                  train_months: int = 12, test_months: int = 3, initial_cash: float = 100_000.0,
-                 cost_bps: float = 10.0, min_trades: int | None = None) -> WalkForwardResult:
-    """`min_trades` in each train window; default 2 per ticker (≈ one round trip per ticker)."""
+                 cost_bps: float = 10.0, min_trades: int | None = None,
+                 borrow_bps: float = 30.0, trailing_stop: float | None = None,
+                 take_profit: float | None = None, trailing_stop_atr: float | None = None,
+                 stop_rearm: bool = False, stop_cooldown_weeks: int = 0) -> WalkForwardResult:
+    """`min_trades` in each train window; default 2 per ticker (≈ one round trip per ticker).
+    The baseline trades in the same direction as the grid's rules (long / short / both). Trailing stop and
+    take-profit (see run_backtest) apply to train windows, test windows and the baseline alike."""
+    exits = {"borrow_bps": borrow_bps, "trailing_stop": trailing_stop, "take_profit": take_profit,
+             "trailing_stop_atr": trailing_stop_atr, "stop_rearm": stop_rearm, "stop_cooldown_weeks": stop_cooldown_weeks}
     grid = grid or default_grid()
     min_trades = 2 * len(prices) if min_trades is None else min_trades
-    baseline = BaselineStrategy(max_alloc=strategy.max_alloc)
+    baseline = BaselineStrategy(max_alloc=strategy.max_alloc, direction=grid[0].direction)
     folds, equities, base_equities, trades, round_trips = [], [], [], [], []
     cash, base_cash = initial_cash, initial_cash
     for train_start, train_end, test_start, test_end in make_folds(start, end, train_months, test_months):
         best = None
         for rules in grid:
             strategy.rules = rules
-            res = run_backtest(prices, strategy, train_start, train_end, initial_cash, cost_bps)
+            res = run_backtest(prices, strategy, train_start, train_end, initial_cash, cost_bps, **exits)
             m = summarize(res.equity, res.trades)
             rank = _rank(m, min_trades)
             if best is None or rank > best[0]:
                 best = (rank, rules, m)
         _, best_rules, train_m = best
         strategy.rules = best_rules
-        test = run_backtest(prices, strategy, test_start, test_end, cash, cost_bps, liquidate_at_end=True)
-        base = run_backtest(prices, baseline, test_start, test_end, base_cash, cost_bps, liquidate_at_end=True)
+        test = run_backtest(prices, strategy, test_start, test_end, cash, cost_bps, liquidate_at_end=True,
+                            **exits)
+        base = run_backtest(prices, baseline, test_start, test_end, base_cash, cost_bps, liquidate_at_end=True,
+                            **exits)
         folds.append(Fold(train_start, train_end, test_start, test_end, best_rules, train_m["sharpe"], train_m["trades"],
                           summarize(test.equity, test.trades, test.round_trip_pnl)))
         equities.append(test.equity)

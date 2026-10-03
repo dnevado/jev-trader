@@ -53,6 +53,10 @@ class JevDecision(BaseModel):
     def p_buy(self) -> float:
         return self.action_probabilities.get("buy", 0.0)
 
+    @property
+    def p_sell(self) -> float:
+        return self.action_probabilities.get("sell", 0.0)
+
 
 class Classifier(Protocol):
     model: str

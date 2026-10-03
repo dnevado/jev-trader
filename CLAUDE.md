@@ -137,6 +137,19 @@ Size × maximum allocation per position.
 Exit: `action==sell or trend_up<0.40`. A held position with no exit keeps its weight (no resizing).
 Baseline (`strategy.BaselineStrategy`): enter when close > SMA200 and RSI14 < 70; exit when close < SMA200.
 
+Extensions (all off by default, so earlier runs reproduce; CLI flags on `backtest` / `baseline` / `walkforward`):
+- Rule flags (`JevRules`): `use_overbought`, `sell_veto`, `exit_on_sell`, fixed `min_quality` / `valuation_penalty`
+  (`--no-overbought --no-sell-veto --no-exit-on-sell --min-quality 0 --valuation-penalty 0` = preset
+  `JEV_LOOSE_LONG`; the original signals rules with direction both = `JEV_STRICT_BOTH`).
+- `--direction long|short|both`: shorts mirror the long rules (baseline: close < SMA200 and RSI > 30; Jev:
+  trend_up ≤ 1 − threshold, quality ≤ 2 − min_quality, buy veto/cover on buy, size from 1 − trend_up and
+  (1 − valuation_risk)); `both` flips close-then-open. Borrow fee `--borrow-bps` (default 30/yr).
+- Engine exits, checked every session: `--trailing-stop` (fraction), `--trailing-stop-atr` (× ATR14 of t-1,
+  ratchets), `--take-profit`; re-entry after a stop `--stop-rearm` (fresh signal) / `--stop-cooldown N` weeks.
+  A strategy may set exits per position (`position_exits`) and lift re-entry blocks (`release_stop_block`).
+- `backtest --strategy regime`: `RegimeSwitchStrategy` (index close vs SMA200 at t-1: bull → long-only strategy,
+  bear → long+short strategy), `--regime-index SPY|QQQ --bull baseline|jev --bear baseline|jev --bear-long-stop-atr`.
+
 ## 6. Summarizer prompt (fundamentals, OpenAI)
 
 System (fixed, cached): fundamental analyst; use ONLY the documents; do not use own knowledge
@@ -229,6 +242,30 @@ jev-backtest/
    every call counted in the FMP daily budget. Output in `data/research/*.json`.
    Caveat: tickers chosen with today's data → backtesting them over the past has hindsight/survivorship bias.
 8. ~~Discovery UI~~ Done: React sample in `ui/` + `api.py` (`python -m jevbt serve`; `JEVBT_RESEARCH_MOCK=1` for canned runs without paid calls).
+9. **Experiments on Alpaca prices, 2026-10-02/03** (tickers AMD AMZN AAPL AAL; Jev answers cached for 2023-01..2026-09).
+   All results below assume the cached Jev answers; a backtest only hits the cache when the price history starts
+   at 2023-01-01 − 400 days (recursive RSI/ATR change the state text otherwise → new paid calls).
+   - Walk-forward OOS 2024-01..2026-09: AAPL Jev +11% / baseline +69% / B&H +84%; AMD Jev +27% / baseline +419%
+     / B&H +355%. AMD fundamentals look weak (GAAP margins hit by ~$3-4B/yr Xilinx amortization → quality < 1,
+     GAAP P/E 160-260x → valuation_risk ~0.75, `sell` ~50% of weeks), which blocked longs through the rally.
+   - Removing gates step by step improves Jev every time (AMD +27% → +132%, AAPL +11% → +35% with
+     `JEV_LOOSE_LONG`), i.e. the fundamentals answers hurt longs; Jev then acts as a noisier trend filter.
+     4-ticker portfolio long-only: Jev loose Sharpe 1.01 vs baseline 0.94 (return +42% vs +64%).
+   - Shorts / long+short: hurt in the 2024-26 rise (baseline both: whipsaw, AAL −84%, AMZN −56%); pay off in
+     declines (2022, Dec-2024..Apr-2025 correction, AMD 2024-25: baseline short +24..41%; Jev strict long+short
+     +12% / +32% with Sharpe 3.3 / 1.1, beating baseline long+short in declines).
+   - Stops: fixed 3% destroys returns (85% of stop-outs re-entered within a week, costs 12.6% of capital);
+     ATR 2-3× and fresh-signal re-entry are better but still below no-stop in rises; in declines stops help the
+     long side and wipe out short gains. Stops make sense only for long+short (baseline both 2×ATR+rearm:
+     +17% Sharpe 0.51 DD −12% vs +12% / 0.29 / −28% without).
+   - Market-regime switch (SPY/QQQ vs SMA200) fails: the index regime turns bear after the drop and bull after the
+     rebound (every 2023-26 bear span ended higher than it started), and misses stock-specific declines (AMD fell
+     62% with the market 93% bull). 2023-26: regime variants +30% at best vs baseline long +109%.
+   - **Conclusion**: nothing beat buy & hold (+312% 2023-26). Baseline long is the best active strategy in rises;
+     Jev's value is per-stock and defensive (strict long+short in declines, smallest drawdowns long-only).
+     Rules were chosen after seeing 2024-26 → partly in-sample; 4 tickers. Next: forward paper testing; if
+     anything, a per-stock regime from Jev's bearish answers; better fundamentals inputs (EBITDA-like margin,
+     non-GAAP valuation) would change the Jev state → all calls paid again.
 
 ## 9. Conventions
 

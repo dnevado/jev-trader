@@ -48,6 +48,13 @@ def _ingest(args: argparse.Namespace) -> int:
     return status
 
 
+def _exit_options(args: argparse.Namespace) -> dict:
+    """Engine exit options (trailing stops, take-profit, re-entry after a stop) from the CLI."""
+    return {"trailing_stop": args.trailing_stop, "take_profit": args.take_profit,
+            "trailing_stop_atr": args.trailing_stop_atr, "stop_rearm": args.stop_rearm,
+            "stop_cooldown_weeks": args.stop_cooldown}
+
+
 def _rule_flags(args: argparse.Namespace) -> dict:
     """JevRules overrides from --no-overbought / --no-sell-veto / --no-exit-on-sell / --min-quality /
     --valuation-penalty (the last two fix the value for every rule set of the walk-forward grid)."""
@@ -57,6 +64,7 @@ def _rule_flags(args: argparse.Namespace) -> dict:
     for name in ("min_quality", "valuation_penalty"):
         if getattr(args, name, None) is not None:
             flags[name] = getattr(args, name)
+    flags["direction"] = getattr(args, "direction", "long")
     return flags
 
 
@@ -118,21 +126,41 @@ def _fmt(x: float) -> str:
 def _backtest(args: argparse.Namespace) -> int:
     from jevbt.backtest.engine import buy_and_hold, run_backtest
     from jevbt.backtest.metrics import summarize
-    from jevbt.strategy import BaselineStrategy
+    from jevbt.strategy import JEV_LOOSE_LONG, JEV_STRICT_BOTH, BaselineStrategy, JevStrategy, RegimeSwitchStrategy
 
+    regime = args.strategy == "regime"
+    needs_jev = args.strategy == "jev" or (regime and "jev" in (args.bull, args.bear))
     try:
-        settings, tickers, max_alloc, prices, (strategy, summarizer, decider) = _load(args, args.strategy == "jev")
+        settings, tickers, max_alloc, prices, (strategy, summarizer, decider) = _load(args, needs_jev)
+        if regime:
+            warm_start = (pd.Timestamp(args.start) - pd.Timedelta(days=WARMUP_DAYS)).date()
+            index_prices = AlpacaClient(settings).prices(args.regime_index, warm_start, args.end)
     except (FMPError, AlpacaError) as e:
         print(e, file=sys.stderr)
         return 1
-    if strategy is None:
-        strategy = BaselineStrategy(max_alloc=max_alloc)
+    if regime:
+        jev = strategy
+
+        def side(kind, preset, direction):
+            if kind == "baseline":
+                return BaselineStrategy(max_alloc=max_alloc, direction=direction)
+            return JevStrategy(jev.graph, jev.ratios, preset, max_alloc)
+
+        exits = ({("bear", 1): {"trailing_stop_atr": args.bear_long_stop_atr, "stop_rearm": True}}
+                 if args.bear_long_stop_atr else {})
+        strategy = RegimeSwitchStrategy(index_prices, side(args.bull, JEV_LOOSE_LONG, "long"),
+                                        side(args.bear, JEV_STRICT_BOTH, "both"), exits)
+        name = f"regime-{args.regime_index}-{args.bull}-{args.bear}"
+    elif strategy is None:
+        strategy = BaselineStrategy(max_alloc=max_alloc, direction=args.direction)
         name = "baseline"
     else:
         name = f"jev-{args.entry_mode}"
+    if args.direction != "long" and not regime:
+        name += f"-{args.direction}"
     run_dir = _run_dir(settings, name, args.offline)
     result = run_backtest(prices, strategy, args.start, args.end, cost_bps=args.cost_bps,
-                          log_path=run_dir / "decisions.jsonl")
+                          log_path=run_dir / "decisions.jsonl", borrow_bps=args.borrow_bps, **_exit_options(args))
     bh = buy_and_hold(prices, args.start, args.end, cost_bps=args.cost_bps)
     metrics = {
         name: summarize(result.equity, result.trades, result.round_trip_pnl),
@@ -143,6 +171,10 @@ def _backtest(args: argparse.Namespace) -> int:
     (run_dir / "metrics.json").write_text(json.dumps(
         {"tickers": tickers, "start": args.start, "end": args.end, "max_alloc": max_alloc,
          "cost_bps": args.cost_bps, "offline": args.offline, "entry_mode": getattr(args, "entry_mode", None),
+         "direction": args.direction, "borrow_bps": args.borrow_bps,
+         "exits": _exit_options(args),
+         "regime": {"index": args.regime_index, "bull": args.bull, "bear": args.bear,
+                    "bear_long_stop_atr": args.bear_long_stop_atr} if regime else None,
          "metrics": metrics}, indent=2))
 
     print(pd.DataFrame(metrics).T.to_string(float_format=_fmt))
@@ -164,7 +196,8 @@ def _walkforward(args: argparse.Namespace) -> int:
         return 1
     flags = _rule_flags(args)
     wf = walk_forward(prices, strategy, args.start, args.end, grid=default_grid(**flags), train_months=args.train_months,
-                      test_months=args.test_months, cost_bps=args.cost_bps, min_trades=args.min_trades)
+                      test_months=args.test_months, cost_bps=args.cost_bps, min_trades=args.min_trades,
+                      borrow_bps=args.borrow_bps, **_exit_options(args))
     oos_start, oos_end = wf.equity.index[0], wf.equity.index[-1]
     metrics = {
         "jev_walkforward": summarize(wf.equity, wf.trades, wf.round_trip_pnl),
@@ -180,7 +213,8 @@ def _walkforward(args: argparse.Namespace) -> int:
         {"tickers": tickers, "start": args.start, "end": args.end,
          "out_of_sample": [str(oos_start.date()), str(oos_end.date())],
          "train_months": args.train_months, "test_months": args.test_months, "min_trades": args.min_trades,
-         "rule_flags": flags,
+         "rule_flags": flags, "borrow_bps": args.borrow_bps,
+         "exits": _exit_options(args),
          "max_alloc": max_alloc,
          "cost_bps": args.cost_bps, "offline": args.offline, "metrics": metrics}, indent=2))
     with pd.option_context("display.width", 220):
@@ -235,8 +269,27 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--end", required=True)
         p.add_argument("--max-alloc", type=float, default=None, help="max weight per position (default 1/N)")
         p.add_argument("--cost-bps", type=float, default=10.0)
+        p.add_argument("--direction", choices=["long", "short", "both"], default="long",
+                       help="long only (default), short only (mirror rules) or both (flip on reversal)")
+        p.add_argument("--borrow-bps", type=float, default=30.0, help="annual borrow fee on short positions")
+        p.add_argument("--trailing-stop", type=float, default=None,
+                       help="trailing stop as a fraction, e.g. 0.03 = exit 3%% from the best price since entry")
+        p.add_argument("--take-profit", type=float, default=None,
+                       help="take-profit as a fraction of the entry price, e.g. 0.10")
+        p.add_argument("--trailing-stop-atr", type=float, default=None,
+                       help="volatility-adjusted trailing stop in ATRs, e.g. 3 = 3 x ATR14 from the best price")
+        p.add_argument("--stop-rearm", action="store_true",
+                       help="after a stop, re-enter the same side only after the signal has switched off once")
+        p.add_argument("--stop-cooldown", type=int, default=0, help="after a stop, wait at least N weeks to re-enter")
         if name == "backtest":
-            p.add_argument("--strategy", choices=["jev", "baseline"], default="jev")
+            p.add_argument("--strategy", choices=["jev", "baseline", "regime"], default="jev")
+            p.add_argument("--regime-index", default="SPY", help="regime: index whose close vs SMA200 sets bull/bear")
+            p.add_argument("--bull", choices=["baseline", "jev"], default="baseline",
+                           help="regime: long-only strategy above the index SMA200 (jev = loose long preset)")
+            p.add_argument("--bear", choices=["baseline", "jev"], default="jev",
+                           help="regime: long+short strategy below the index SMA200 (jev = strict long+short preset)")
+            p.add_argument("--bear-long-stop-atr", type=float, default=None,
+                           help="regime: ATR trailing stop (+ fresh-signal re-entry) for longs opened in the bear regime")
             p.add_argument("--entry-mode", choices=["action", "signals"], default="action")
         if name == "walkforward":
             p.add_argument("--train-months", type=int, default=12)

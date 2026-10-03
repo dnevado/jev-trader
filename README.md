@@ -22,6 +22,9 @@ Copy-Item .env.example .env   # fill ALPACA_API_KEY_ID/SECRET_KEY and FMP_API_KE
 .venv\Scripts\python -m jevbt backtest --tickers AAPL MSFT --start 2023-01-01 --end 2026-09-25            # OpenAI + Jev
 .venv\Scripts\python -m jevbt backtest --tickers AMZN --start 2026-04-01 --end 2026-09-25 --entry-mode signals
 .venv\Scripts\python -m jevbt walkforward --tickers AMZN --start 2023-01-01 --end 2026-09-25        # out-of-sample
+.venv\Scripts\python -m jevbt walkforward --tickers AMD AAPL --start 2023-01-01 --end 2026-09-25 --direction both  # long+short
+.venv\Scripts\python -m jevbt baseline --tickers AMD --start 2023-01-01 --end 2026-09-25 --direction both --trailing-stop-atr 2 --stop-rearm
+.venv\Scripts\python -m jevbt backtest --strategy regime --regime-index QQQ --bull baseline --bear jev --tickers AMD AAPL --start 2023-01-01 --end 2026-09-25
 .venv\Scripts\python -m jevbt research "profitable US large caps with revenue growth" --seed AMZN MSFT  # FMP MCP
 .venv\Scripts\python scripts\probe_fmp_mcp.py                                                        # list MCP tools
 ```
