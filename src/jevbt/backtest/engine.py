@@ -55,6 +55,7 @@ def run_backtest(
     trailing_stop_atr: float | None = None,
     stop_rearm: bool = False,
     stop_cooldown_weeks: int = 0,
+    max_gross: float | None = None,
 ) -> BacktestResult:
     """`liquidate_at_end` closes every open position at the last session's close (with costs),
     so a window's result and round trips are complete (used by walk-forward test windows).
@@ -77,7 +78,11 @@ def run_backtest(
     A strategy may choose the exits of each new position: if it has `position_exits(t, sign)`, the keys of the
     dict it returns (names of the five exit arguments above) override those arguments for that position;
     None or a missing key keeps the argument (strategy.NO_EXITS disables every exit). A strategy with
-    `release_stop_block(t, stopped_at)` can lift a re-entry block early (e.g. after a regime change)."""
+    `release_stop_block(t, stopped_at)` can lift a re-entry block early (e.g. after a regime change).
+
+    max_gross — cap on gross exposure (sum of |weights|, e.g. 1.0 = no leverage) at each rebalance: if held
+    positions plus new entries would exceed it, the new entries (and flips) are scaled down proportionally.
+    Held positions are never trimmed (no resizing), so exposure can drift above the cap with price moves."""
     start, end = pd.Timestamp(start), pd.Timestamp(end)
     features = {tk: compute_technical(df) for tk, df in prices.items()}
     calendar = pd.DatetimeIndex(sorted(set().union(*(df.index for df in prices.values()))))
@@ -201,6 +206,8 @@ def run_backtest(
                         prev = closes.loc[:d].iloc[:-1][tk].dropna()
                         marks[tk] = prev.iloc[-1] if len(prev) else np.nan
                 eq_open = cash + sum(shares[tk] * marks[tk] for tk in prices if shares[tk])
+                # 1) Decide every ticker from the same opening equity.
+                decisions = []
                 for tk, df in prices.items():
                     if d not in df.index:
                         continue
@@ -215,6 +222,22 @@ def run_backtest(
                         target_w, note = apply_block(d, tk, target_w)
                         if note:
                             record = {**record, "blocked": note}
+                    decisions.append([tk, price, current_w, target_w, record])
+                # 2) Gross exposure cap: new entries (and flips) share what the held positions leave free.
+                if max_gross is not None and eq_open > 0:
+                    decided = {dec[0] for dec in decisions}
+                    held = sum(abs(shares[tk] * marks[tk]) / eq_open for tk in prices if shares[tk] and tk not in decided)
+                    is_entry = [dec[3] != 0 and dec[3] * dec[2] <= 0 for dec in decisions]
+                    committed = held + sum(abs(dec[3]) for dec, e in zip(decisions, is_entry) if not e)
+                    wanted = sum(abs(dec[3]) for dec, e in zip(decisions, is_entry) if e)
+                    room = max(0.0, max_gross - committed)
+                    if wanted > room:
+                        for dec, e in zip(decisions, is_entry):
+                            if e:
+                                dec[3] *= room / wanted
+                                dec[4] = {**dec[4], "scaled_by_gross_cap": room / wanted}
+                # 3) Execute.
+                for tk, price, current_w, target_w, record in decisions:
                     order = None
                     if target_w != current_w:
                         target_shares = target_w * eq_open / price

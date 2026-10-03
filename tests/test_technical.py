@@ -63,7 +63,8 @@ def test_drawdown():
 
 def test_compute_technical_columns_and_warmup(ohlcv):
     f = compute_technical(ohlcv)
-    assert list(f.columns) == ["close", "sma50", "sma200", "rsi14", "mom_3m", "mom_12m", "atr_pct", "drawdown"]
+    assert list(f.columns) == ["close", "sma50", "sma200", "rsi14", "mom_3m", "mom_12m", "atr_pct", "drawdown",
+                               "sma200_slope", "above200_share", "eff_ratio", "adx14"]
     assert f.index.equals(ohlcv.index)
     assert f["sma200"].iloc[:199].isna().all() and f["sma200"].iloc[199:].notna().all()
     assert f["mom_12m"].iloc[:252].isna().all() and f["mom_12m"].iloc[252:].notna().all()
@@ -96,3 +97,39 @@ def test_no_look_ahead(ohlcv):
     tampered.loc[tampered.index >= t, ["open", "high", "low", "close"]] *= 3.0
     after = features_asof(compute_technical(tampered), t)
     pd.testing.assert_series_equal(before, after)
+
+
+# ---------- trend-confidence indicators ----------
+
+def _ohlc(close):
+    close = pd.Series(close, index=pd.bdate_range("2020-01-01", periods=len(close), name="date"), dtype=float)
+    return pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99, "close": close, "volume": 1})
+
+
+def test_efficiency_ratio_straight_line_vs_zigzag():
+    from jevbt.features.technical import efficiency_ratio
+
+    line = pd.Series(np.linspace(100, 160, 100))
+    zigzag = pd.Series(100 + np.tile([0.0, 2.0], 50))
+    assert efficiency_ratio(line, 60).iloc[-1] == pytest.approx(1.0)
+    assert efficiency_ratio(zigzag, 60).iloc[-1] == pytest.approx(0.0)
+    assert efficiency_ratio(line, 60).iloc[:60].isna().all()
+
+
+def test_share_above_and_slope():
+    from jevbt.features.technical import share_above, slope
+
+    close = pd.Series([1.0, 3.0, 1.0, 3.0, 3.0])
+    level = pd.Series([np.nan, 2.0, 2.0, 2.0, 2.0])
+    out = share_above(close, level, 2)
+    assert np.isnan(out.iloc[1]) and out.iloc[2] == 0.5 and out.iloc[4] == 1.0
+    assert slope(pd.Series([100.0, 110.0, 121.0]), 1).iloc[-1] == pytest.approx(0.10)
+
+
+def test_adx_high_in_trend_low_in_chop():
+    from jevbt.features.technical import adx
+
+    trend = _ohlc(np.linspace(100, 200, 120))
+    chop = _ohlc(100 + 3 * np.sin(np.arange(120)))
+    assert adx(trend["high"], trend["low"], trend["close"]).iloc[-1] > 40
+    assert adx(chop["high"], chop["low"], chop["close"]).iloc[-1] < 20

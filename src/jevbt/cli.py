@@ -52,7 +52,7 @@ def _exit_options(args: argparse.Namespace) -> dict:
     """Engine exit options (trailing stops, take-profit, re-entry after a stop) from the CLI."""
     return {"trailing_stop": args.trailing_stop, "take_profit": args.take_profit,
             "trailing_stop_atr": args.trailing_stop_atr, "stop_rearm": args.stop_rearm,
-            "stop_cooldown_weeks": args.stop_cooldown}
+            "stop_cooldown_weeks": args.stop_cooldown, "max_gross": args.max_gross}
 
 
 def _rule_flags(args: argparse.Namespace) -> dict:
@@ -126,10 +126,12 @@ def _fmt(x: float) -> str:
 def _backtest(args: argparse.Namespace) -> int:
     from jevbt.backtest.engine import buy_and_hold, run_backtest
     from jevbt.backtest.metrics import summarize
-    from jevbt.strategy import JEV_LOOSE_LONG, JEV_STRICT_BOTH, BaselineStrategy, JevStrategy, RegimeSwitchStrategy
+    from jevbt.strategy import (JEV_LOOSE_LONG, JEV_STRICT_BOTH, BaselineStrategy, JevStrategy, RegimeSwitchStrategy,
+                                TrendConfidenceStrategy, jev_short_confirmation)
 
     regime = args.strategy == "regime"
-    needs_jev = args.strategy == "jev" or (regime and "jev" in (args.bull, args.bear))
+    needs_jev = (args.strategy == "jev" or (regime and "jev" in (args.bull, args.bear))
+                 or (args.strategy == "trend" and args.jev_confirm_short))
     try:
         settings, tickers, max_alloc, prices, (strategy, summarizer, decider) = _load(args, needs_jev)
         if regime:
@@ -151,6 +153,13 @@ def _backtest(args: argparse.Namespace) -> int:
         strategy = RegimeSwitchStrategy(index_prices, side(args.bull, JEV_LOOSE_LONG, "long"),
                                         side(args.bear, JEV_STRICT_BOTH, "both"), exits)
         name = f"regime-{args.regime_index}-{args.bull}-{args.bear}"
+    elif args.strategy == "trend":
+        confirm = None
+        if args.jev_confirm_short:
+            confirm = jev_short_confirmation(JevStrategy(strategy.graph, strategy.ratios, max_alloc=max_alloc))
+        strategy = TrendConfidenceStrategy(max_alloc=max_alloc, direction=args.direction,
+                                           vol_sizing=args.vol_sizing, confirm_short=confirm)
+        name = "trend"
     elif strategy is None:
         strategy = BaselineStrategy(max_alloc=max_alloc, direction=args.direction)
         name = "baseline"
@@ -281,8 +290,15 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--stop-rearm", action="store_true",
                        help="after a stop, re-enter the same side only after the signal has switched off once")
         p.add_argument("--stop-cooldown", type=int, default=0, help="after a stop, wait at least N weeks to re-enter")
+        p.add_argument("--max-gross", type=float, default=None,
+                       help="cap on gross exposure at each rebalance (1.0 = fully invested, no leverage)")
         if name == "backtest":
-            p.add_argument("--strategy", choices=["jev", "baseline", "regime"], default="jev")
+            p.add_argument("--strategy", choices=["jev", "baseline", "regime", "trend"], default="jev",
+                           help="trend = trade only confident up/down trends (use --direction both for long+short)")
+            p.add_argument("--vol-sizing", action="store_true",
+                           help="trend: size entries by 2%% / ATR%% (0.5-2x --max-alloc); combine with --max-gross")
+            p.add_argument("--jev-confirm-short", action="store_true",
+                           help="trend: open shorts only when Jev confirms (paid calls unless cached)")
             p.add_argument("--regime-index", default="SPY", help="regime: index whose close vs SMA200 sets bull/bear")
             p.add_argument("--bull", choices=["baseline", "jev"], default="baseline",
                            help="regime: long-only strategy above the index SMA200 (jev = loose long preset)")

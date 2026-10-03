@@ -51,20 +51,55 @@ def drawdown(close: pd.Series) -> pd.Series:
     return close / close.cummax() - 1
 
 
+def slope(s: pd.Series, n: int) -> pd.Series:
+    """Relative change of a series over n sessions (e.g. of the SMA200: > 0 rising, < 0 falling)."""
+    return s / s.shift(n) - 1
+
+
+def share_above(close: pd.Series, level: pd.Series, n: int) -> pd.Series:
+    """Fraction of the last n sessions that closed above `level` (NaN until n valid sessions)."""
+    above = (close > level).astype(float).where(level.notna())
+    return above.rolling(n, min_periods=n).mean()
+
+
+def efficiency_ratio(close: pd.Series, n: int) -> pd.Series:
+    """Kaufman's efficiency ratio in [0, 1]: |net move over n| / sum of |daily moves|. High = clean trend."""
+    path = close.diff().abs().rolling(n, min_periods=n).sum()
+    return (close - close.shift(n)).abs() / path
+
+
+def adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    """Wilder's Average Directional Index (trend strength, direction-free; > 20-25 = trending)."""
+    up, down = high.diff(), -low.diff()
+    plus_dm = up.where((up > down) & (up > 0), 0.0)
+    minus_dm = down.where((down > up) & (down > 0), 0.0)
+    atr_ = atr(high, low, close, n)
+    plus_di = 100 * _wilder(plus_dm, n) / atr_
+    minus_di = 100 * _wilder(minus_dm, n) / atr_
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    return _wilder(dx, n)
+
+
 def compute_technical(prices: pd.DataFrame) -> pd.DataFrame:
     """OHLCV indexed by date (columns open/high/low/close) → indicator table with the same index."""
     prices = prices.sort_index()
     close = prices["close"]
+    sma200 = sma(close, 200)
     return pd.DataFrame(
         {
             "close": close,
             "sma50": sma(close, 50),
-            "sma200": sma(close, 200),
+            "sma200": sma200,
             "rsi14": rsi(close, 14),
             "mom_3m": momentum(close, TRADING_DAYS_3M),
             "mom_12m": momentum(close, TRADING_DAYS_12M),
             "atr_pct": atr(prices["high"], prices["low"], close, 14) / close,
             "drawdown": drawdown(close),
+            # Trend-confidence inputs (strategy.TrendConfidenceStrategy); not part of the Jev state.
+            "sma200_slope": slope(sma200, 20),
+            "above200_share": share_above(close, sma200, 60),
+            "eff_ratio": efficiency_ratio(close, 60),
+            "adx14": adx(prices["high"], prices["low"], close, 14),
         },
         index=prices.index,
     )

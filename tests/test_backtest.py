@@ -503,3 +503,71 @@ def test_strategy_can_release_a_stop_block():
     released = run_backtest({"X": px}, ReleaseAfterTwoWeeks(), "2024-01-01", "2024-02-23", **common)
     assert list(held_out.trades["reason"]) == ["signal", "stop"]
     assert released.trades.iloc[2]["date"] == pd.Timestamp("2024-01-22")
+
+
+# ---------- trend-confidence strategy ----------
+
+def _trend_tech(**over):
+    base = dict(close=120.0, sma50=115.0, sma200=100.0, sma200_slope=0.02, above200_share=0.9, eff_ratio=0.3,
+                adx14=30.0, mom_3m=0.1, mom_12m=0.2, rsi14=60.0)
+    return pd.Series({**base, **over})
+
+
+def test_trend_confidence_entries_and_no_trend():
+    from jevbt.strategy import TrendConfidenceStrategy
+
+    s = TrendConfidenceStrategy(max_alloc=0.5, direction="both")
+    assert s.target("X", None, _trend_tech(), 0.0)[0] == 0.5
+    down = _trend_tech(close=80.0, sma50=85.0, sma200_slope=-0.02, above200_share=0.05, mom_3m=-0.1, mom_12m=-0.3,
+                       rsi14=40.0)
+    assert s.target("X", None, down, 0.0)[0] == -0.5
+    for weak in (dict(eff_ratio=0.05), dict(adx14=12.0), dict(above200_share=0.6), dict(sma200_slope=-0.01),
+                 dict(mom_12m=-0.1), dict(sma50=105.0, sma200=110.0), dict(rsi14=75.0)):
+        assert s.target("X", None, _trend_tech(**weak), 0.0)[0] == 0.0, weak
+    assert TrendConfidenceStrategy(0.5, "long").target("X", None, down, 0.0)[0] == 0.0
+    assert TrendConfidenceStrategy(0.5, "short").target("X", None, _trend_tech(), 0.0)[0] == 0.0
+
+
+def test_trend_confidence_exit_hysteresis():
+    from jevbt.strategy import TrendConfidenceStrategy
+
+    s = TrendConfidenceStrategy(max_alloc=0.5, direction="both")
+    # Weaker than an entry (low ADX / ER) but trend intact: keep holding.
+    assert s.target("X", None, _trend_tech(adx14=10.0, eff_ratio=0.05), 0.5)[0] == 0.5
+    # Below the SMA200 but 3m momentum still positive: hold; both negative: exit; SMA200 turning down: exit.
+    assert s.target("X", None, _trend_tech(close=95.0), 0.5)[0] == 0.5
+    assert s.target("X", None, _trend_tech(close=95.0, mom_3m=-0.05), 0.5)[0] == 0.0
+    assert s.target("X", None, _trend_tech(sma200_slope=-0.001), 0.5)[0] == 0.0
+    # Short mirror: covers when the SMA200 turns up; never flips straight to long.
+    assert s.target("X", None, _trend_tech(), -0.5)[0] == 0.0
+
+
+def test_trend_vol_sizing_and_short_confirmation():
+    from jevbt.strategy import TrendConfidenceStrategy
+
+    calm, wild = _trend_tech(atr_pct=0.01), _trend_tech(atr_pct=0.08)
+    s = TrendConfidenceStrategy(max_alloc=0.1, vol_sizing=True)
+    assert s.target("X", None, calm, 0.0)[0] == pytest.approx(0.2)    # 2% / 1% = 2 (cap)
+    assert s.target("X", None, wild, 0.0)[0] == pytest.approx(0.05)   # 2% / 8% = 0.25 → floor 0.5
+    assert TrendConfidenceStrategy(max_alloc=0.1).target("X", None, wild, 0.0)[0] == 0.1
+    down = _trend_tech(close=80.0, sma50=85.0, sma200_slope=-0.02, above200_share=0.05, mom_3m=-0.1, mom_12m=-0.3,
+                       rsi14=40.0, atr_pct=0.02)
+    seen = []
+    no = TrendConfidenceStrategy(max_alloc=0.1, confirm_short=lambda tk, t, tech: seen.append(tk) or False)
+    yes = TrendConfidenceStrategy(max_alloc=0.1, confirm_short=lambda tk, t, tech: True)
+    assert no.target("X", None, down, 0.0)[0] == 0.0 and seen == ["X"]
+    assert yes.target("X", None, down, 0.0)[0] == -0.1
+    assert no.target("X", None, _trend_tech(atr_pct=0.02), 0.0)[0] == 0.1  # longs never asked
+
+
+def test_max_gross_scales_new_entries():
+    px = flat_prices()
+    prices = {tk: px for tk in ("A", "B", "C", "D")}
+    capped = run_backtest(prices, ScriptedStrategy({"2024-01-08": 0.5}), "2024-01-02", "2024-02-09",
+                          initial_cash=10_000, cost_bps=0, max_gross=1.0)
+    first = capped.trades[capped.trades["date"] == pd.Timestamp("2024-01-08")]
+    assert len(first) == 4
+    assert (first["shares"] * first["price"]).sum() == pytest.approx(10_000)  # 4 × 50% scaled to 100%
+    free = run_backtest(prices, ScriptedStrategy({"2024-01-08": 0.5}), "2024-01-02", "2024-02-09",
+                        initial_cash=10_000, cost_bps=0)
+    assert (free.trades["shares"] * free.trades["price"]).iloc[:4].sum() == pytest.approx(20_000)

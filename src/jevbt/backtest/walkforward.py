@@ -103,12 +103,14 @@ def walk_forward(prices: dict[str, pd.DataFrame], strategy: JevStrategy, start, 
                  cost_bps: float = 10.0, min_trades: int | None = None,
                  borrow_bps: float = 30.0, trailing_stop: float | None = None,
                  take_profit: float | None = None, trailing_stop_atr: float | None = None,
-                 stop_rearm: bool = False, stop_cooldown_weeks: int = 0) -> WalkForwardResult:
+                 stop_rearm: bool = False, stop_cooldown_weeks: int = 0,
+                 max_gross: float | None = None) -> WalkForwardResult:
     """`min_trades` in each train window; default 2 per ticker (≈ one round trip per ticker).
     The baseline trades in the same direction as the grid's rules (long / short / both). Trailing stop and
     take-profit (see run_backtest) apply to train windows, test windows and the baseline alike."""
     exits = {"borrow_bps": borrow_bps, "trailing_stop": trailing_stop, "take_profit": take_profit,
-             "trailing_stop_atr": trailing_stop_atr, "stop_rearm": stop_rearm, "stop_cooldown_weeks": stop_cooldown_weeks}
+             "trailing_stop_atr": trailing_stop_atr, "stop_rearm": stop_rearm, "stop_cooldown_weeks": stop_cooldown_weeks,
+             "max_gross": max_gross}
     grid = grid or default_grid()
     min_trades = 2 * len(prices) if min_trades is None else min_trades
     baseline = BaselineStrategy(max_alloc=strategy.max_alloc, direction=grid[0].direction)

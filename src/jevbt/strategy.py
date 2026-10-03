@@ -7,7 +7,7 @@ triggers no exit keeps its current weight (no resizing) to limit turnover.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 import numpy as np
 import pandas as pd
@@ -220,3 +220,96 @@ class RegimeSwitchStrategy:
     def position_exits(self, t: pd.Timestamp, sign: int) -> dict:
         # The regime at entry decides the exits for the whole life of the position.
         return {**NO_EXITS, **self.exits.get((self.regime(t), sign), {})}
+
+
+@dataclass(frozen=True)
+class TrendRules:
+    """Thresholds of TrendConfidenceStrategy (round values fixed before testing, see CLAUDE.md §8)."""
+
+    persistence: float = 0.80      # share of the last 60 sessions on the trend side of the SMA200
+    min_eff_ratio: float = 0.15    # 60-session efficiency ratio (median of the test universe ≈ 0.13)
+    min_adx: float = 20.0
+    rsi_guard: bool = True         # like the baseline: no long at RSI ≥ 70, no short at RSI ≤ 30
+
+
+@dataclass
+class TrendConfidenceStrategy:
+    """Trade only stocks in a clear trend; stay out of the others.
+
+    Up-trend (long) when ALL hold: close > SMA200, SMA200 rising over 20 sessions, ≥ `persistence` of the last
+    60 closes above the SMA200, efficiency ratio ≥ `min_eff_ratio` and ADX ≥ `min_adx`, 3m and 12m momentum > 0,
+    SMA50 > SMA200 (and RSI < 70 with `rsi_guard`). Down-trend (short): the mirror image.
+    Exits use a lower bar than entries (hysteresis): a long exits when (close < SMA200 and 3m momentum < 0) or
+    the SMA200 turns down; a short covers on the mirror condition. No flip in one step: after an exit the
+    opposite side needs its own full entry signal at a later rebalance.
+
+    vol_sizing     — entry weight = max_alloc × (ref_atr / ATR%), clipped to [0.5, 2] × max_alloc: calm stocks
+                     get larger positions, volatile ones smaller (combine with run_backtest(max_gross=...)).
+    confirm_short  — optional second opinion: a short only opens if confirm_short(ticker, t, technical) is True
+                     (e.g. jev_short_confirmation). Exits stay technical.
+    """
+
+    max_alloc: float = 0.1
+    direction: Direction = "both"
+    rules: TrendRules = TrendRules()
+    vol_sizing: bool = False
+    ref_atr: float = 0.02
+    confirm_short: Callable[[str, pd.Timestamp, pd.Series], bool] | None = None
+    name: str = "trend"
+
+    def size(self, tech: pd.Series) -> float:
+        if not self.vol_sizing or not np.isfinite(tech["atr_pct"]) or tech["atr_pct"] <= 0:
+            return self.max_alloc
+        return self.max_alloc * float(np.clip(self.ref_atr / tech["atr_pct"], 0.5, 2.0))
+
+    def trend(self, tech: pd.Series) -> int:
+        """+1 confident up-trend, −1 confident down-trend, 0 no clear trend (or warm-up)."""
+        r = self.rules
+        needed = ("sma50", "sma200", "sma200_slope", "above200_share", "eff_ratio", "adx14", "mom_3m", "mom_12m", "rsi14")
+        if not all(np.isfinite(tech[k]) for k in needed):
+            return 0
+        strong = tech["eff_ratio"] >= r.min_eff_ratio and tech["adx14"] >= r.min_adx
+        if not strong:
+            return 0
+        up = (tech["close"] > tech["sma200"] and tech["sma200_slope"] > 0 and tech["above200_share"] >= r.persistence
+              and tech["mom_3m"] > 0 and tech["mom_12m"] > 0 and tech["sma50"] > tech["sma200"]
+              and (not r.rsi_guard or tech["rsi14"] < 70))
+        down = (tech["close"] < tech["sma200"] and tech["sma200_slope"] < 0
+                and tech["above200_share"] <= 1 - r.persistence
+                and tech["mom_3m"] < 0 and tech["mom_12m"] < 0 and tech["sma50"] < tech["sma200"]
+                and (not r.rsi_guard or tech["rsi14"] > 30))
+        return 1 if up else -1 if down else 0
+
+    def target(self, ticker, t, technical, current_weight):
+        if not np.isfinite(technical["sma200"]):
+            return 0.0, {"reason": "warm-up"}
+        tech = technical
+        if current_weight > 0:
+            if (tech["close"] < tech["sma200"] and tech["mom_3m"] < 0) or tech["sma200_slope"] < 0:
+                return 0.0, {"reason": "exit: up-trend faded"}
+            return current_weight, {"reason": "hold long"}
+        if current_weight < 0:
+            if (tech["close"] > tech["sma200"] and tech["mom_3m"] > 0) or tech["sma200_slope"] > 0:
+                return 0.0, {"reason": "cover: down-trend faded"}
+            return current_weight, {"reason": "hold short"}
+        trend = self.trend(tech)
+        if trend > 0 and self.direction != "short":
+            return self.size(tech), {"reason": "entry: confident up-trend"}
+        if trend < 0 and self.direction != "long":
+            if self.confirm_short is not None and not self.confirm_short(ticker, t, tech):
+                return 0.0, {"reason": "short not confirmed"}
+            return -self.size(tech), {"reason": "short: confident down-trend"}
+        return 0.0, {"reason": "no clear trend"}
+
+
+def jev_short_confirmation(jev: JevStrategy, max_trend_up: float = 0.4, max_quality: float = 1.0,
+                           min_valuation_risk: float = 0.6) -> Callable[[str, pd.Timestamp, pd.Series], bool]:
+    """Jev confirms a short when its trend reading is bearish, it does not say buy, and the fundamentals are weak
+    or the valuation risky. Uses the memoized/cached Jev decision of `jev` for (ticker, t)."""
+
+    def confirm(ticker: str, t: pd.Timestamp, technical: pd.Series) -> bool:
+        d = jev.decision(ticker, t, technical)["decision"]
+        return (d.trend_up <= max_trend_up and d.action != "buy"
+                and (d.fundamental_quality <= max_quality or d.valuation_risk >= min_valuation_risk))
+
+    return confirm

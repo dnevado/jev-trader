@@ -147,6 +147,9 @@ Extensions (all off by default, so earlier runs reproduce; CLI flags on `backtes
 - Engine exits, checked every session: `--trailing-stop` (fraction), `--trailing-stop-atr` (× ATR14 of t-1,
   ratchets), `--take-profit`; re-entry after a stop `--stop-rearm` (fresh signal) / `--stop-cooldown N` weeks.
   A strategy may set exits per position (`position_exits`) and lift re-entry blocks (`release_stop_block`).
+- `backtest --strategy trend` (`TrendConfidenceStrategy` + `TrendRules`): trades only confident trends using
+  SMA200 slope, persistence above/below the SMA200, efficiency ratio and ADX (indicators in `features/technical.py`,
+  not part of the Jev state); `--vol-sizing`, `--jev-confirm-short`. Engine `--max-gross` caps gross exposure.
 - `backtest --strategy regime`: `RegimeSwitchStrategy` (index close vs SMA200 at t-1: bull → long-only strategy,
   bear → long+short strategy), `--regime-index SPY|QQQ --bull baseline|jev --bear baseline|jev --bear-long-stop-atr`.
 
