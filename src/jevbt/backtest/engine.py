@@ -32,6 +32,22 @@ def rebalance_dates(calendar: pd.DatetimeIndex) -> pd.DatetimeIndex:
     return calendar[~weeks.duplicated()]
 
 
+def apply_gross_cap(decisions: list[list], held: float, max_gross: float) -> None:
+    """Scale new entries (and flips) so that gross exposure stays ≤ max_gross; shared with paper trading.
+
+    `decisions` rows are [ticker, price, current_weight, target_weight, record] (mutated in place); `held` is the
+    gross weight of open positions that are not in `decisions`. Held/closing positions are never trimmed."""
+    is_entry = [dec[3] != 0 and dec[3] * dec[2] <= 0 for dec in decisions]
+    committed = held + sum(abs(dec[3]) for dec, e in zip(decisions, is_entry) if not e)
+    wanted = sum(abs(dec[3]) for dec, e in zip(decisions, is_entry) if e)
+    room = max(0.0, max_gross - committed)
+    if wanted > room:
+        for dec, e in zip(decisions, is_entry):
+            if e:
+                dec[3] *= room / wanted
+                dec[4] = {**dec[4], "scaled_by_gross_cap": room / wanted}
+
+
 def _json_default(o):
     if isinstance(o, (pd.Timestamp,)):
         return o.isoformat()
@@ -227,15 +243,7 @@ def run_backtest(
                 if max_gross is not None and eq_open > 0:
                     decided = {dec[0] for dec in decisions}
                     held = sum(abs(shares[tk] * marks[tk]) / eq_open for tk in prices if shares[tk] and tk not in decided)
-                    is_entry = [dec[3] != 0 and dec[3] * dec[2] <= 0 for dec in decisions]
-                    committed = held + sum(abs(dec[3]) for dec, e in zip(decisions, is_entry) if not e)
-                    wanted = sum(abs(dec[3]) for dec, e in zip(decisions, is_entry) if e)
-                    room = max(0.0, max_gross - committed)
-                    if wanted > room:
-                        for dec, e in zip(decisions, is_entry):
-                            if e:
-                                dec[3] *= room / wanted
-                                dec[4] = {**dec[4], "scaled_by_gross_cap": room / wanted}
+                    apply_gross_cap(decisions, held, max_gross)
                 # 3) Execute.
                 for tk, price, current_w, target_w, record in decisions:
                     order = None

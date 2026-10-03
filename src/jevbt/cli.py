@@ -5,6 +5,7 @@
   python -m jevbt walkforward --tickers AAPL MSFT --start 2023-01-01 --end 2026-09-25 [--offline]
   python -m jevbt research "profitable US large caps with accelerating revenue" [--seed AMZN MSFT] [--max-tickers 10]
   python -m jevbt serve [--port 8000]      # API for the React UI in ui/
+  python -m jevbt paper --tickers AMD NKE ... [--direction long] [--submit]   # Alpaca PAPER account, dry run by default
 """
 
 from __future__ import annotations
@@ -235,6 +236,36 @@ def _walkforward(args: argparse.Namespace) -> int:
     return 0
 
 
+def _paper(args: argparse.Namespace) -> int:
+    from jevbt.broker.alpaca_paper import BrokerError
+    from jevbt.paper import run_paper
+    from jevbt.strategy import BaselineStrategy, TrendConfidenceStrategy
+
+    tickers = [t.upper() for t in args.tickers]
+    if args.strategy == "trend":
+        strategy = TrendConfidenceStrategy(max_alloc=args.max_alloc, direction=args.direction, vol_sizing=args.vol_sizing)
+    else:
+        strategy = BaselineStrategy(max_alloc=args.max_alloc, direction=args.direction)
+    try:
+        run = run_paper(load_settings(), tickers, strategy, max_gross=args.max_gross, submit=args.submit,
+                        time_in_force=args.tif, force=args.force, equity=args.equity)
+    except (BrokerError, AlpacaError) as e:
+        print(e, file=sys.stderr)
+        return 1
+    print(f"{'SUBMITTED' if run['submitted'] else 'DRY RUN (nothing sent; add --submit)'}  {run['date']}  "
+          f"equity {run['equity']:,.2f}  max gross {run['max_gross']}")
+    for note in run["notes"]:
+        print(f"note: {note}")
+    for d in run["decisions"]:
+        print(f"  {d['ticker']:6} data to {d['data_until']}  weight {d['current_weight']:+.3f} -> {d['target_weight']:+.3f}"
+              f"  {d.get('reason', '')}")
+    print("orders:" if run["orders"] else "orders: none")
+    for o in run["orders"]:
+        print(f"  {o['side']:4} {o['qty']:6d} {o['ticker']:6} ({o['reason']}, ref {o['ref_price']:.2f})  {o['status']}")
+    print(f"log: {run['log_path']}")
+    return 0
+
+
 def _research(args: argparse.Namespace) -> int:
     import asyncio
 
@@ -327,6 +358,20 @@ def main(argv: list[str] | None = None) -> int:
     research.add_argument("--max-tickers", type=int, default=10)
     research.add_argument("--seed", nargs="*", default=None, help="seed tickers to expand with peers")
 
+    paper = sub.add_parser("paper", help="weekly step on an Alpaca PAPER account (dry run unless --submit)")
+    paper.add_argument("--tickers", nargs="+", required=True)
+    paper.add_argument("--strategy", choices=["trend", "baseline"], default="trend")
+    paper.add_argument("--direction", choices=["long", "short", "both"], default="long")
+    paper.add_argument("--max-alloc", type=float, default=1 / 12, help="weight per position (default 1/12)")
+    paper.add_argument("--max-gross", type=float, default=1.0, help="cap on gross exposure (default 1.0)")
+    paper.add_argument("--vol-sizing", action="store_true")
+    paper.add_argument("--submit", action="store_true", help="send the orders to the paper account")
+    paper.add_argument("--tif", choices=["opg", "day"], default="opg",
+                       help="opg = market-on-open (submit before 09:28 ET, like the backtest); day = now")
+    paper.add_argument("--force", action="store_true", help="submit even if today is not the first session of the week")
+    paper.add_argument("--equity", type=float, default=None,
+                       help="dry run without paper keys: size orders for this equity (assumes no positions)")
+
     serve = sub.add_parser("serve", help="HTTP API for the React UI (ui/); JEVBT_RESEARCH_MOCK=1 for mock runs")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
@@ -334,6 +379,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "ingest":
         return _ingest(args)
+    if args.command == "paper":
+        return _paper(args)
     if args.command == "research":
         return _research(args)
     if args.command == "serve":

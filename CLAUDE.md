@@ -192,7 +192,9 @@ jev-backtest/
     backtest/engine.py       # weekly rebalance, execution at t+1 open, costs in bps, multi-ticker
     backtest/metrics.py      # CAGR, Sharpe, max DD, # trades, hit rate
     research/mcp_agent.py    # ChatOpenAI (full) + FMP MCP agent
-    cli.py                   # python -m jevbt ingest | backtest | baseline | walkforward | research | serve
+    broker/alpaca_paper.py   # Alpaca Trading API, PAPER endpoint only (refuses any other host)
+    paper.py                 # weekly forward paper-trading step (same strategy + gross cap as the backtest)
+    cli.py                   # python -m jevbt ingest | backtest | baseline | walkforward | research | serve | paper
     api.py                   # FastAPI for the UI: POST/GET /api/research, GET /api/budget
   ui/                        # React + Vite stock-discovery UI (npm run dev → :5173, proxies /api → :8000)
   tests/                     # synthetic data + OpenAI and Jev mocks (no network)

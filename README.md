@@ -38,6 +38,21 @@ Data is cached in `data/raw/` (Parquet). Cached ranges never hit the network.
 - Statements: FMP; the daily request counter lives in `data/raw/_budget.json` (`FMP_DAILY_BUDGET`, default 240
   of the 250 free requests). The old FMP price cache (`data/raw/prices/`) is no longer used and can be deleted.
 
+## Forward paper trading (Alpaca paper account)
+
+Weekly step with the same strategy code as the backtest; only the paper endpoint is ever used.
+Run it on the first session of the week before 09:28 ET (market-on-open orders, like the backtest):
+
+```powershell
+.venv\Scripts\python -m jevbt paper --tickers AMD NKE XOM KO                  # dry run: prints and logs orders
+.venv\Scripts\python -m jevbt paper --tickers AMD NKE XOM KO --submit         # sends them to the paper account
+```
+
+Defaults: `--strategy trend --direction long --max-alloc 1/12 --max-gross 1.0 --tif opg`. Whole shares only;
+a long/short flip is a close order plus an open order; shorts need a shortable, easy-to-borrow asset. Each run
+is logged in `data/paper/`. The account starts flat, so a stock needs a full entry signal to be bought (the
+backtest may already hold positions entered earlier).
+
 ## Stock discovery UI (React)
 
 A small React + Vite app in `ui/` to prompt the research agent (OpenAI + FMP MCP) and browse past runs.

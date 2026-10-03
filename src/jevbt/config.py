@@ -17,6 +17,10 @@ class Settings(BaseModel):
     alpaca_data_url: str = "https://data.alpaca.markets"
     # sip = consolidated tape (free plan: only data older than 15 min, fine for past daily bars); iex = IEX only.
     alpaca_feed: str = "sip"
+    # Paper trading (python -m jevbt paper): only the paper endpoint is ever used; keys fall back to the data keys.
+    alpaca_paper_url: str = "https://paper-api.alpaca.markets"
+    alpaca_paper_key_id: str = ""
+    alpaca_paper_secret_key: str = ""
     fmp_api_key: str = ""
     fmp_base_url: str = "https://financialmodelingprep.com/stable"
     fmp_daily_budget: int = 240
@@ -49,6 +53,9 @@ def load_settings() -> Settings:
         "alpaca_api_secret_key": os.getenv("ALPACA_API_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY"),
         "alpaca_data_url": os.getenv("ALPACA_DATA_URL"),
         "alpaca_feed": os.getenv("ALPACA_DATA_FEED"),
+        "alpaca_paper_url": os.getenv("ALPACA_PAPER_URL"),
+        "alpaca_paper_key_id": os.getenv("ALPACA_PAPER_KEY_ID"),
+        "alpaca_paper_secret_key": os.getenv("ALPACA_PAPER_SECRET_KEY"),
         "fmp_api_key": os.getenv("FMP_API_KEY"),
         "fmp_base_url": os.getenv("FMP_BASE_URL"),
         "fmp_daily_budget": os.getenv("FMP_DAILY_BUDGET"),
