@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+aws_profile        = "my-sso-profile"
+aws_region         = "eu-central-1"
+notification_email = "me@example.com"
+tickers = [
+  "AMD", "AMZN", "AAPL", "MSFT", "NVDA", "JPM", "COST", "AAL", "CHTR", "PYPL",
+  "ALGN", "LULU", "NKE", "APTV", "FIS", "XYZ", "CSGP", "BAX", "KO", "PG",
+  "JNJ", "VZ", "XOM", "PEP", "INTC", "MU", "DIS", "NFLX", "TSLA", "F",
+  "UNH", "LLY", "BMY", "BIIB", "BAC", "GS", "CAT", "BA", "UPS", "DE",
+  "OXY", "SLB", "FCX", "NEM", "ALB", "NEE", "DUK", "AES", "AMT", "SPG",
+]

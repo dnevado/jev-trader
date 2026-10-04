@@ -53,6 +53,26 @@ a long/short flip is a close order plus an open order; shorts need a shortable, 
 is logged in `data/paper/`. The account starts flat, so a stock needs a full entry signal to be bought (the
 backtest may already hold positions entered earlier).
 
+### Scheduled on AWS (ECS Fargate + EventBridge Scheduler)
+
+`infra/terraform/` deploys the weekly step as a container job: EventBridge Scheduler (Mon-Fri, America/New_York)
+starts an ECS Fargate task running `python -m jevbt.aws_job trade|report`:
+- 09:00 `trade`: only on the first session of the week, submits market-on-open orders and emails them
+  (or "no orders"); run log in S3.
+- 10:00 `report`: emails the fills (positions opened / closed) and any order not filled.
+- Failures: the job emails the traceback; an EventBridge rule emails tasks that exit non-zero or fail to start.
+Alpaca paper keys live in SSM SecureString parameters (set outside Terraform, never in the state).
+Alpaca does not email paper-account fills, so all notifications come from SNS (confirm the subscription email once).
+
+```powershell
+cd infra\terraform
+Copy-Item terraform.tfvars.example terraform.tfvars      # profile, region, email, tickers
+terraform init; terraform apply                           # one workspace per AWS account (terraform workspace new <name>)
+# then: set /jevbt/alpaca_api_key_id and /jevbt/alpaca_api_secret_key with aws ssm put-parameter --type SecureString --overwrite
+docker build --platform linux/amd64 -f ..\..\docker\Dockerfile -t jevbt-paper:v1 ..\..
+# docker login to ECR, then: docker tag/push jevbt-paper:v1 <ecr_repository_url output>:v1
+```
+
 ## Stock discovery UI (React)
 
 A small React + Vite app in `ui/` to prompt the research agent (OpenAI + FMP MCP) and browse past runs.

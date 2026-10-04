@@ -53,6 +53,11 @@ class AlpacaPaperBroker:
     def asset(self, symbol: str) -> dict:
         return self._request("GET", f"v2/assets/{symbol}")
 
+    def orders(self, after: str, status: str = "all", limit: int = 500) -> list[dict]:
+        """Orders submitted after an ISO timestamp (newest first, as Alpaca returns them)."""
+        return self._request("GET", "v2/orders", params={"status": status, "after": after, "limit": limit,
+                                                          "direction": "desc"})
+
     # ---------- orders ----------
 
     def submit_market_order(self, symbol: str, qty: int, side: str, time_in_force: str, client_order_id: str) -> dict:

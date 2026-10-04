@@ -1,0 +1,8 @@
+# Runtime dependencies of the scheduled paper-trading job (same major versions as the local venv).
+pandas==3.0.6
+numpy==2.5.3
+pyarrow==25.0.1
+requests==2.34.2
+pydantic==2.13.5
+python-dotenv>=1.0
+boto3>=1.35

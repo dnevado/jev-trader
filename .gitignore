@@ -8,3 +8,11 @@ __pycache__/
 ui/node_modules/
 ui/dist/
 *.tsbuildinfo
+build/
+infra/terraform/.terraform/
+infra/terraform/.build/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/terraform.tfvars
+infra/terraform/tfplan
+infra/terraform/terraform.tfstate.d/

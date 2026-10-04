@@ -194,9 +194,12 @@ jev-backtest/
     research/mcp_agent.py    # ChatOpenAI (full) + FMP MCP agent
     broker/alpaca_paper.py   # Alpaca Trading API, PAPER endpoint only (refuses any other host)
     paper.py                 # weekly forward paper-trading step (same strategy + gross cap as the backtest)
+    aws_job.py               # scheduled AWS job (python -m jevbt.aws_job trade|report): orders + SNS emails
     cli.py                   # python -m jevbt ingest | backtest | baseline | walkforward | research | serve | paper
     api.py                   # FastAPI for the UI: POST/GET /api/research, GET /api/budget
   ui/                        # React + Vite stock-discovery UI (npm run dev → :5173, proxies /api → :8000)
+  docker/                    # Dockerfile + requirements of the scheduled job image
+  infra/terraform/           # ECS Fargate + EventBridge Scheduler + SNS + S3 + SSM (one workspace per AWS account)
   tests/                     # synthetic data + OpenAI and Jev mocks (no network)
 ```
 

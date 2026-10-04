@@ -1,0 +1,4 @@
+*
+!docker/requirements-job.txt
+!src/jevbt/**
+**/__pycache__
