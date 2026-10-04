@@ -4,6 +4,17 @@
 
 data "aws_caller_identity" "current" {}
 
+# Guard: never plan/apply this workspace with credentials of another account (e.g. a wrong aws_profile).
+resource "terraform_data" "account_guard" {
+  input = var.account_id
+  lifecycle {
+    precondition {
+      condition     = data.aws_caller_identity.current.account_id == var.account_id
+      error_message = "Credentials are for account ${data.aws_caller_identity.current.account_id}, but this workspace deploys to ${var.account_id}. Check aws_profile."
+    }
+  }
+}
+
 data "aws_vpc" "default" {
   default = true
 }

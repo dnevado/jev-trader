@@ -1,5 +1,6 @@
 # Copy to terraform.tfvars (git-ignored) and fill in.
 aws_profile        = "my-sso-profile"
+account_id         = "123456789012"
 aws_region         = "eu-central-1"
 notification_email = "me@example.com"
 tickers = [

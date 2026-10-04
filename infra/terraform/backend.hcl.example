@@ -1,0 +1,8 @@
+# Copy to backend.hcl (git-ignored), then: terraform init -backend-config=backend.hcl
+# The bucket is created once outside Terraform (versioning + encryption + public access block), see README.
+bucket       = "my-tfstate-bucket"
+key          = "jevbt-paper/terraform.tfstate"
+region       = "eu-central-1"
+profile      = "my-profile"
+encrypt      = true
+use_lockfile = true

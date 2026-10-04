@@ -63,11 +63,14 @@ starts an ECS Fargate task running `python -m jevbt.aws_job trade|report`:
 - Failures: the job emails the traceback; an EventBridge rule emails tasks that exit non-zero or fail to start.
 Alpaca paper keys live in SSM SecureString parameters (set outside Terraform, never in the state).
 Alpaca does not email paper-account fills, so all notifications come from SNS (confirm the subscription email once).
+Terraform state lives in S3 (native lock file, versioned bucket); `account_id` in terraform.tfvars is checked against
+the credentials, so a wrong `aws_profile` stops plan/apply instead of touching another account.
 
 ```powershell
 cd infra\terraform
 Copy-Item terraform.tfvars.example terraform.tfvars      # profile, region, email, tickers
-terraform init; terraform apply                           # one workspace per AWS account (terraform workspace new <name>)
+Copy-Item backend.hcl.example backend.hcl                # S3 state bucket (created once: versioning, encryption, no public access)
+terraform init -backend-config=backend.hcl; terraform apply   # one workspace per AWS account (terraform workspace new <name>)
 # then: set /jevbt/alpaca_api_key_id and /jevbt/alpaca_api_secret_key with aws ssm put-parameter --type SecureString --overwrite
 docker build --platform linux/amd64 -f ..\..\docker\Dockerfile -t jevbt-paper:v1 ..\..
 # docker login to ECR, then: docker tag/push jevbt-paper:v1 <ecr_repository_url output>:v1

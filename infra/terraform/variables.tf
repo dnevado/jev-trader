@@ -3,6 +3,11 @@ variable "aws_region" {
   default = "eu-central-1"
 }
 
+variable "account_id" {
+  description = "AWS account this workspace deploys to; plan/apply stop if the credentials belong to another account."
+  type        = string
+}
+
 variable "aws_profile" {
   description = "AWS CLI / SSO profile used to deploy (null = default credentials chain)."
   type        = string
