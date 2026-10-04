@@ -153,6 +153,44 @@ Extensions (all off by default, so earlier runs reproduce; CLI flags on `backtes
 - `backtest --strategy regime`: `RegimeSwitchStrategy` (index close vs SMA200 at t-1: bull → long-only strategy,
   bear → long+short strategy), `--regime-index SPY|QQQ --bull baseline|jev --bear baseline|jev --bear-long-stop-atr`.
 
+## 5b. Live strategy: trend confidence (forward paper trading since 2026-10-05)
+
+`strategy.TrendConfidenceStrategy` + `TrendRules`. Daily bars, decisions from data ≤ t-1, weekly rebalance on the
+first session of the week. Thresholds are round values fixed BEFORE testing — do not tune them on past data
+(forward paper trading is the test). No LLM / Jev in the live strategy.
+
+| Entry (all must hold) | Long | Short (off live) |
+|---|---|---|
+| Close vs SMA200 | above | below |
+| SMA200 vs 20 sessions ago | rising | falling |
+| Last 60 closes on the trend side of the SMA200 | ≥ 80% | ≥ 80% |
+| Strength | efficiency ratio(60) ≥ 0.15 and ADX(14) ≥ 20 | same |
+| Momentum | 3m and 12m > 0 | 3m and 12m < 0 |
+| SMA50 vs SMA200 | above | below |
+| RSI(14) guard | < 70 | > 30 |
+
+- Exit (lower bar than entry, hysteresis): long exits when (close < SMA200 and 3m momentum < 0) or the SMA200 turns
+  down; short mirrors. No flip in one step, no stops (stops hurt in every test), held positions are not resized.
+- Sizing: 1/12 of equity per position, gross exposure capped at 100% (`max_gross`; new entries scaled pro rata,
+  holdings never trimmed). `--vol-sizing` exists but lowered returns (shifts capital to calm, trendless stocks).
+- Optional `confirm_short` hook (`jev_short_confirmation`): Jev confirmed every technical short → no added value.
+- Known weakness: slow re-entry after V-shaped crashes (needs 60 sessions of persistence): 2020 0% vs baseline +53%,
+  Q4-2018 rebound worse than baseline.
+
+Live configuration (paper account, weekly):
+- Universe: 50 US stocks across all 11 sectors (list in `infra/terraform/terraform.tfvars.example`), long only,
+  `max_alloc` 1/12, `max_gross` 1.0, market-on-open orders (`opg`), whole shares. The account started flat
+  (positions open only on full entry signals; the backtest would already hold ~18 names).
+- Runs on AWS account **291573578422** (eu-central-1, Terraform workspace `mgmt`, state in S3 bucket
+  `jevbt-tfstate-291573578422-eu-central-1`): EventBridge Scheduler → ECS Fargate task `python -m jevbt.aws_job`
+  Mon–Fri 09:00 `trade` (acts only on the first session of the week) and 10:00 `report` (America/New_York).
+  Emails via SNS (orders submitted / "no orders", fills opened/closed, errors; Alpaca does not email paper fills).
+  Alpaca keys in SSM SecureString `/jevbt/*` (never in Terraform state). `account_id` guard in Terraform.
+- Account W1Dev (064374365425) was tried first: AWS blocks compute there (ECS `BlockedException`, Lambda denied, even
+  for admins; account ACTIVE, only FullAWSAccess SCP) → stack destroyed; needs an AWS Support case to use it.
+- Redeploy after code changes: rebuild `docker/Dockerfile`, push to the ECR repo with a new tag, `terraform apply
+  -var image_tag=<tag>`.
+
 ## 6. Summarizer prompt (fundamentals, OpenAI)
 
 System (fixed, cached): fundamental analyst; use ONLY the documents; do not use own knowledge
@@ -274,6 +312,22 @@ jev-backtest/
      Rules were chosen after seeing 2024-26 → partly in-sample; 4 tickers. Next: forward paper testing; if
      anything, a per-stock regime from Jev's bearish answers; better fundamentals inputs (EBITDA-like margin,
      non-GAAP valuation) would change the Jev state → all calls paid again.
+10. **Trend-confidence strategy and wider tests, 2026-10-03/04** (no paid calls; SIP prices 2016+; split- but not
+    dividend-adjusted, which understates long strategies and B&H). Return / Sharpe / max DD:
+    - 24 stocks (4 above + the user's 10 decliners + 7 risers + 6 defensives), 2018-26: trend long 1/12 cap 100%
+      +221% / 0.84 / −25%, trend long+short +201% / 0.80 / −28%, baseline long +143% / 0.74 / −26%, B&H +521% /
+      0.91 / −45%. Trend filter avoided trendless stocks (defensives: baseline long+short −64% median, trend +1%).
+    - Fresh 26 sector-diverse stocks chosen without looking at returns, 2018-26: trend long +157% / 0.67 / −26% vs
+      baseline long (same 1/12 sizing) +158% / 0.67 / −27% → **no edge on unseen stocks**, except higher hit rate
+      (41% vs 27%) and 3.5× fewer trades; the whole gap vs baseline 1/N (+167%) is 2020 (V-shaped rebound).
+      Trend wins 2024-26 (+122% vs +63%) and sell-offs; shorts lose overall (−18%), help only in 2018/2022.
+    - All 50: trend long +334% / 0.89 / −29% vs B&H +401% / 0.88 / −37% (includes the in-sample 24).
+    - Pre-2020 (Q4-2018 crash, 2018-19 rebound, 2022; baseline variants only, no fundamentals before FY2021):
+      shorts win pure crashes and stock-specific declines (+14..+32%), lose when a V-rebound follows; fixed/ATR stops
+      help in choppy years (2018) and hurt in trending ones; market-regime switch failed in every period.
+    - Decision: trade trend long only, 1/12, cap 100%, no stops, no Jev; judge it on forward paper results.
+    Scripts for these runs were ad-hoc (not in the repo); rerun via `backtest --strategy trend --direction long
+    --max-alloc 0.0833 --max-gross 1` on the same tickers/periods with `ALPACA_DATA_FEED=sip` (IEX starts mid-2020).
 
 ## 9. Conventions
 
