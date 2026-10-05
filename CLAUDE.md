@@ -149,15 +149,17 @@ Extensions (all off by default, so earlier runs reproduce; CLI flags on `backtes
   A strategy may set exits per position (`position_exits`) and lift re-entry blocks (`release_stop_block`).
 - `backtest --strategy trend` (`TrendConfidenceStrategy` + `TrendRules`): trades only confident trends using
   SMA200 slope, persistence above/below the SMA200, efficiency ratio and ADX (indicators in `features/technical.py`,
-  not part of the Jev state); `--vol-sizing`, `--jev-confirm-short`. Engine `--max-gross` caps gross exposure.
+  not part of the Jev state); `--vol-sizing`, `--jev-confirm-short`. Engine `--max-gross` caps gross exposure;
+  `--rebalance weekly|daily` (default weekly) sets when strategies decide and trade.
 - `backtest --strategy regime`: `RegimeSwitchStrategy` (index close vs SMA200 at t-1: bull → long-only strategy,
   bear → long+short strategy), `--regime-index SPY|QQQ --bull baseline|jev --bear baseline|jev --bear-long-stop-atr`.
 
 ## 5b. Live strategy: trend confidence (forward paper trading since 2026-10-05)
 
-`strategy.TrendConfidenceStrategy` + `TrendRules`. Daily bars, decisions from data ≤ t-1, weekly rebalance on the
-first session of the week. Thresholds are round values fixed BEFORE testing — do not tune them on past data
-(forward paper trading is the test). No LLM / Jev in the live strategy.
+`strategy.TrendConfidenceStrategy` + `TrendRules`. Daily bars, decisions from data ≤ t-1, **daily rebalance** live
+since 2026-10-06 (`rebalance="daily"`; weekly = first session of the week remains the engine default).
+Thresholds are round values fixed BEFORE testing — do not tune them on past data (forward paper trading is the
+test). No LLM / Jev in the live strategy.
 
 | Entry (all must hold) | Long | Short (off live) |
 |---|---|---|
@@ -174,17 +176,19 @@ first session of the week. Thresholds are round values fixed BEFORE testing — 
 - Sizing: 1/12 of equity per position, gross exposure capped at 100% (`max_gross`; new entries scaled pro rata,
   holdings never trimmed). `--vol-sizing` exists but lowered returns (shifts capital to calm, trendless stocks).
 - Optional `confirm_short` hook (`jev_short_confirmation`): Jev confirmed every technical short → no added value.
-- Known weakness: slow re-entry after V-shaped crashes (needs 60 sessions of persistence): 2020 0% vs baseline +53%,
-  Q4-2018 rebound worse than baseline.
+- Known weakness: slow re-entry after V-shaped crashes (needs 60 sessions of persistence): weekly 2020 0% vs baseline
+  +53%; daily rebalancing reacts faster (2020 +16%) but still lags.
 
-Live configuration (paper account, weekly):
+Live configuration (paper account, daily):
 - Universe: 50 US stocks across all 11 sectors (list in `infra/terraform/terraform.tfvars.example`), long only,
-  `max_alloc` 1/12, `max_gross` 1.0, market-on-open orders (`opg`), whole shares. The account started flat
-  (positions open only on full entry signals; the backtest would already hold ~18 names).
+  `max_alloc` 1/12, `max_gross` 1.0, **daily** rebalance (`rebalance = "daily"`, image `v2`), market-on-open orders
+  (`opg`), whole shares. The account started flat (positions open only on full entry signals; the backtest would
+  already hold ~18 names).
 - Runs on AWS account **291573578422** (eu-central-1, Terraform workspace `mgmt`, state in S3 bucket
   `jevbt-tfstate-291573578422-eu-central-1`): EventBridge Scheduler → ECS Fargate task `python -m jevbt.aws_job`
-  Mon–Fri 09:00 `trade` (acts only on the first session of the week) and 10:00 `report` (America/New_York).
-  Emails via SNS (orders submitted / "no orders", fills opened/closed, errors; Alpaca does not email paper fills).
+  Mon–Fri 09:00 `trade` (every trading session in daily mode) and 10:00 `report` (America/New_York).
+  Emails via SNS: orders submitted (any day with orders), "no orders" only on the first session of the week, fills
+  opened/closed, errors (Alpaca does not email paper fills).
   Alpaca keys in SSM SecureString `/jevbt/*` (never in Terraform state). `account_id` guard in Terraform.
 - Account W1Dev (064374365425) was tried first: AWS blocks compute there (ECS `BlockedException`, Lambda denied, even
   for admins; account ACTIVE, only FullAWSAccess SCP) → stack destroyed; needs an AWS Support case to use it.
@@ -326,6 +330,10 @@ jev-backtest/
       shorts win pure crashes and stock-specific declines (+14..+32%), lose when a V-rebound follows; fixed/ATR stops
       help in choppy years (2018) and hurt in trending ones; market-regime switch failed in every period.
     - Decision: trade trend long only, 1/12, cap 100%, no stops, no Jev; judge it on forward paper results.
+    - Daily vs weekly rebalance (2026-10-05, trend long 1/12 cap 100%, 2018-26): fresh 26 +205% / 0.77 / −24% daily vs
+      +157% / 0.67 / −26% weekly; all 50 +395% / 0.95 / −25% vs +334% / 0.89 / −29% (B&H +401% / 0.88 / −37%); only
+      ~10% more trades (state-based rules), costs 4.8% vs 4.5% of capital; worse in 2022 (all 50: −17% vs −7%).
+      Chosen after seeing these results (mild in-sample choice) → live switched to daily.
     Scripts for these runs were ad-hoc (not in the repo); rerun via `backtest --strategy trend --direction long
     --max-alloc 0.0833 --max-gross 1` on the same tickers/periods with `ALPACA_DATA_FEED=sip` (IEX starts mid-2020).
 

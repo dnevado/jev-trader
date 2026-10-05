@@ -217,6 +217,7 @@ resource "aws_ecs_task_definition" "job" {
       JEVBT_MAX_ALLOC     = tostring(var.max_alloc)
       JEVBT_MAX_GROSS     = tostring(var.max_gross)
       JEVBT_TIF           = "opg"
+      JEVBT_REBALANCE     = var.rebalance
       JEVBT_LOG_BUCKET    = aws_s3_bucket.logs.bucket
       JEVBT_SNS_TOPIC_ARN = aws_sns_topic.notify.arn
       JEVBT_SSM_PREFIX    = var.ssm_prefix

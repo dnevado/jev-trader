@@ -140,3 +140,10 @@ def test_outside_positions_count_in_the_gross_cap(settings):
                     prices_client=FakePrices({"UPCO": trending_up()}))
     assert run["decisions"][0]["target_weight"] == pytest.approx(0.10)  # only 10% room left under the 100% cap
     assert any("outside the universe" in n for n in run["notes"])
+
+
+def test_daily_rebalance_submits_midweek_without_force(settings):
+    broker = AlpacaPaperBroker(settings, session=FakeTradingSession())
+    run = run_paper(settings, ["UPCO"], TrendConfidenceStrategy(0.5), submit=True, today=date(2026, 9, 30),
+                    broker=broker, prices_client=FakePrices({"UPCO": trending_up()}), rebalance="daily")
+    assert run["submitted"] and run["rebalance"] == "daily" and run["notes"] == []

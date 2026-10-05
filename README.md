@@ -48,7 +48,8 @@ Run it on the first session of the week before 09:28 ET (market-on-open orders, 
 .venv\Scripts\python -m jevbt paper --tickers AMD NKE XOM KO --submit         # sends them to the paper account
 ```
 
-Defaults: `--strategy trend --direction long --max-alloc 1/12 --max-gross 1.0 --tif opg`. Whole shares only;
+Defaults: `--strategy trend --direction long --max-alloc 1/12 --max-gross 1.0 --tif opg --rebalance weekly`
+(`--rebalance daily` trades on any session; the AWS deployment runs daily). Whole shares only;
 a long/short flip is a close order plus an open order; shorts need a shortable, easy-to-borrow asset. Each run
 is logged in `data/paper/`. The account starts flat, so a stock needs a full entry signal to be bought (the
 backtest may already hold positions entered earlier).

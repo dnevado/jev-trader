@@ -571,3 +571,17 @@ def test_max_gross_scales_new_entries():
     free = run_backtest(prices, ScriptedStrategy({"2024-01-08": 0.5}), "2024-01-02", "2024-02-09",
                         initial_cash=10_000, cost_bps=0)
     assert (free.trades["shares"] * free.trades["price"]).iloc[:4].sum() == pytest.approx(20_000)
+
+
+def test_daily_rebalance_trades_on_any_session():
+    px = flat_prices()
+    weekly = run_backtest({"X": px}, ScriptedStrategy({"2024-01-10": 1.0}), "2024-01-02", "2024-02-09",
+                          initial_cash=10_000, cost_bps=0)
+    daily_strat = ScriptedStrategy({"2024-01-10": 1.0})
+    daily = run_backtest({"X": px}, daily_strat, "2024-01-02", "2024-02-09", initial_cash=10_000, cost_bps=0,
+                         rebalance="daily")
+    assert weekly.trades.empty                                   # a Wednesday is not a weekly rebalance date
+    assert daily.trades.iloc[0]["date"] == pd.Timestamp("2024-01-10")
+    assert all(seen_date < t for t, seen_date in daily_strat.seen)  # still data ≤ t-1
+    with pytest.raises(ValueError):
+        run_backtest({"X": px}, daily_strat, "2024-01-02", "2024-02-09", rebalance="hourly")

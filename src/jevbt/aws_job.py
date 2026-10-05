@@ -2,14 +2,16 @@
 
 Container entry point: `python -m jevbt.aws_job trade|report` (exit code 1 on failure). `handler(event, context)`
 also works as a Lambda handler. Two scheduled modes, Monday–Friday (America/New_York):
-  {"mode": "trade"}  09:00 — on the first session of the week only: compute targets and submit market-on-open
-                     orders (paper.run_paper), store the run log in S3, email the submitted orders (or "no orders").
+  {"mode": "trade"}  09:00 — on every trading session (JEVBT_REBALANCE=daily) or only on the first session of the
+                     week (weekly): compute targets and submit market-on-open orders (paper.run_paper), store the run
+                     log in S3, email the submitted orders. "No orders" is emailed only on the first session of the
+                     week (a weekly heartbeat), so daily mode does not send an empty email every day.
   {"mode": "report"} 10:00 — after the open: email today's jevbt fills (positions opened / closed) and any order
                      that was not filled. Silent when there were no jevbt orders today.
 Any exception is emailed and re-raised (so CloudWatch counts the error).
 
 Configuration (Lambda environment): JEVBT_TICKERS (comma-separated), JEVBT_STRATEGY (trend|baseline),
-JEVBT_DIRECTION, JEVBT_MAX_ALLOC, JEVBT_MAX_GROSS, JEVBT_VOL_SIZING, JEVBT_TIF, JEVBT_LOG_BUCKET,
+JEVBT_DIRECTION, JEVBT_MAX_ALLOC, JEVBT_MAX_GROSS, JEVBT_VOL_SIZING, JEVBT_TIF, JEVBT_REBALANCE, JEVBT_LOG_BUCKET,
 JEVBT_SNS_TOPIC_ARN, JEVBT_SSM_PREFIX (SecureString parameters <prefix>alpaca_api_key_id / alpaca_api_secret_key),
 JEVBT_DATA_DIR (/tmp/data), ALPACA_DATA_FEED. AWS credentials come from the task role.
 """
@@ -108,15 +110,21 @@ def trade(deps: Deps) -> dict:
     broker = deps.broker_factory(settings)
     today = deps.today
     sessions = broker.calendar((today - timedelta(days=7)).isoformat(), (today + timedelta(days=7)).isoformat())
-    if not first_session_of_week(sessions, today):
+    rebalance = _env("JEVBT_REBALANCE", "weekly")
+    first_of_week = first_session_of_week(sessions, today)
+    if today.isoformat() not in sessions:
+        return {"mode": "trade", "skipped": f"{today} is not a trading session"}
+    if rebalance == "weekly" and not first_of_week:
         return {"mode": "trade", "skipped": f"{today} is not the first session of the week"}
     tickers = [t.strip().upper() for t in _env("JEVBT_TICKERS").split(",") if t.strip()]
     max_gross = float(_env("JEVBT_MAX_GROSS", "1.0"))
     run = deps.run_paper(settings, tickers, build_strategy(), max_gross=max_gross, submit=True,
-                         time_in_force=_env("JEVBT_TIF", "opg"), broker=broker, today=today)
+                         time_in_force=_env("JEVBT_TIF", "opg"), broker=broker, today=today, rebalance=rebalance)
     log_uri = deps.upload(Path(run["log_path"]))
     orders = run["orders"]
-    lines = [f"jevbt paper trading — {today} (first session of the week)",
+    if not orders and not first_of_week:
+        return {"mode": "trade", "orders": 0, "log": log_uri, "email": "skipped (no orders, not first session)"}
+    lines = [f"jevbt paper trading — {today} ({rebalance} rebalance)",
              f"Account equity: {run['equity']:,.2f} USD | universe: {len(tickers)} stocks | max gross {max_gross:.0%}",
              f"Open positions before: {len(run['positions_before'])}", ""]
     if orders:
@@ -126,7 +134,9 @@ def trade(deps: Deps) -> dict:
                          f"{o['ref_price']:.2f})  status: {o['status']}")
         lines.append("\nFills will be reported in a second email after the open (10:00 New York).")
     else:
-        lines.append("No orders this week: no stock passed the entry rules and no open position hit an exit rule.")
+        lines.append("No orders today: no stock passed the entry rules and no open position hit an exit rule."
+                     + (" (Daily mode: you only get emails on days with orders, plus this Monday summary.)"
+                        if rebalance == "daily" else ""))
     lines += [f"\nNotes: {'; '.join(run['notes'])}" if run["notes"] else "", f"Run log: {log_uri}"]
     subject = f"jevbt paper {today}: {len(orders)} order(s) submitted" if orders else f"jevbt paper {today}: no orders"
     deps.publish(subject, "\n".join(lines))

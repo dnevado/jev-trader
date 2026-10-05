@@ -82,8 +82,9 @@ def first_session_of_week(sessions: list[str], today: date) -> bool:
 def run_paper(settings: Settings, tickers: list[str], strategy: Strategy, max_gross: float | None = 1.0,
               submit: bool = False, time_in_force: str = "opg", force: bool = False, equity: float | None = None,
               today: date | None = None, broker: AlpacaPaperBroker | None = None,
-              prices_client: AlpacaClient | None = None) -> dict:
-    """One weekly paper-trading step. Returns (and logs) the decisions and orders."""
+              prices_client: AlpacaClient | None = None, rebalance: str = "weekly") -> dict:
+    """One paper-trading step. `rebalance="weekly"` only submits on the first session of the week (like the
+    weekly backtest); "daily" submits on any trading session. Returns (and logs) the decisions and orders."""
     today = today or date.today()
     t = pd.Timestamp(today)
     notes = []
@@ -100,8 +101,8 @@ def run_paper(settings: Settings, tickers: list[str], strategy: Strategy, max_gr
         sessions = broker.calendar((today - timedelta(days=7)).isoformat(), (today + timedelta(days=7)).isoformat())
         if today.isoformat() not in sessions:
             notes.append(f"{today} is not a trading session")
-        elif not first_session_of_week(sessions, today):
-            notes.append(f"{today} is not the first session of the week (the backtest rebalances weekly)")
+        elif rebalance == "weekly" and not first_session_of_week(sessions, today):
+            notes.append(f"{today} is not the first session of the week (weekly rebalance)")
     else:
         account, positions, held_outside = None, {}, 0.0
     if submit and notes and not force:
@@ -129,7 +130,8 @@ def run_paper(settings: Settings, tickers: list[str], strategy: Strategy, max_gr
         resp = broker.submit_market_order(o.ticker, o.qty, o.side, time_in_force, coid)
         results.append({**asdict(o), "status": resp.get("status"), "order_id": resp.get("id"), "client_order_id": coid})
 
-    run = {"date": today.isoformat(), "submitted": submit, "time_in_force": time_in_force, "strategy": repr(strategy),
+    run = {"date": today.isoformat(), "submitted": submit, "time_in_force": time_in_force, "rebalance": rebalance,
+           "strategy": repr(strategy),
            "tickers": tickers, "equity": equity, "max_gross": max_gross, "positions_before": positions,
            "notes": notes, "decisions": records, "orders": results}
     out_dir = settings.data_dir / "paper"

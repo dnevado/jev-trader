@@ -150,3 +150,25 @@ def test_main_returns_exit_code(monkeypatch):
 
     monkeypatch.setattr(aws_job, "handler", boom)
     assert aws_job.main(["trade"]) == 1
+
+
+def test_daily_mode_trades_midweek_and_emails_only_with_orders(monkeypatch):
+    monkeypatch.setenv("JEVBT_REBALANCE", "daily")
+    deps, sent, calls = make_deps(WEDNESDAY)
+    out = handler({"mode": "trade"}, None, deps)
+    assert calls and calls[0][2]["rebalance"] == "daily"
+    assert out["orders"] == 0 and sent == []                    # no empty email midweek
+    orders = [{"ticker": "XOM", "side": "buy", "qty": 5, "reason": "open", "ref_price": 160.0, "status": "accepted"}]
+    deps, sent, _ = make_deps(WEDNESDAY, run_result={"orders": orders})
+    handler({"mode": "trade"}, None, deps)
+    assert sent and "1 order(s) submitted" in sent[0][0] and "daily rebalance" in sent[0][1]
+    deps, sent, _ = make_deps(MONDAY)                           # weekly heartbeat on the first session
+    handler({"mode": "trade"}, None, deps)
+    assert sent and "no orders" in sent[0][0]
+
+
+def test_daily_mode_skips_non_sessions(monkeypatch):
+    monkeypatch.setenv("JEVBT_REBALANCE", "daily")
+    deps, sent, calls = make_deps(date(2026, 10, 10))  # Saturday
+    out = handler({"mode": "trade"}, None, deps)
+    assert "not a trading session" in out["skipped"] and calls == [] and sent == []

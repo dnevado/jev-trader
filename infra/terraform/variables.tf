@@ -66,6 +66,16 @@ variable "direction" {
   }
 }
 
+variable "rebalance" {
+  description = "weekly (trade on the first session of the week) or daily (every session)."
+  type        = string
+  default     = "weekly"
+  validation {
+    condition     = contains(["weekly", "daily"], var.rebalance)
+    error_message = "rebalance must be weekly or daily."
+  }
+}
+
 variable "max_alloc" {
   description = "Weight per position (1/12 ≈ 0.0833)."
   type        = number

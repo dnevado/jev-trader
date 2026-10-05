@@ -53,7 +53,7 @@ def _exit_options(args: argparse.Namespace) -> dict:
     """Engine exit options (trailing stops, take-profit, re-entry after a stop) from the CLI."""
     return {"trailing_stop": args.trailing_stop, "take_profit": args.take_profit,
             "trailing_stop_atr": args.trailing_stop_atr, "stop_rearm": args.stop_rearm,
-            "stop_cooldown_weeks": args.stop_cooldown, "max_gross": args.max_gross}
+            "stop_cooldown_weeks": args.stop_cooldown, "max_gross": args.max_gross, "rebalance": args.rebalance}
 
 
 def _rule_flags(args: argparse.Namespace) -> dict:
@@ -248,7 +248,7 @@ def _paper(args: argparse.Namespace) -> int:
         strategy = BaselineStrategy(max_alloc=args.max_alloc, direction=args.direction)
     try:
         run = run_paper(load_settings(), tickers, strategy, max_gross=args.max_gross, submit=args.submit,
-                        time_in_force=args.tif, force=args.force, equity=args.equity)
+                        time_in_force=args.tif, force=args.force, equity=args.equity, rebalance=args.rebalance)
     except (BrokerError, AlpacaError) as e:
         print(e, file=sys.stderr)
         return 1
@@ -321,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--stop-rearm", action="store_true",
                        help="after a stop, re-enter the same side only after the signal has switched off once")
         p.add_argument("--stop-cooldown", type=int, default=0, help="after a stop, wait at least N weeks to re-enter")
+        p.add_argument("--rebalance", choices=["weekly", "daily"], default="weekly",
+                       help="decide and trade on the first session of each week (default) or every session")
         p.add_argument("--max-gross", type=float, default=None,
                        help="cap on gross exposure at each rebalance (1.0 = fully invested, no leverage)")
         if name == "backtest":
@@ -368,7 +370,9 @@ def main(argv: list[str] | None = None) -> int:
     paper.add_argument("--submit", action="store_true", help="send the orders to the paper account")
     paper.add_argument("--tif", choices=["opg", "day"], default="opg",
                        help="opg = market-on-open (submit before 09:28 ET, like the backtest); day = now")
-    paper.add_argument("--force", action="store_true", help="submit even if today is not the first session of the week")
+    paper.add_argument("--rebalance", choices=["weekly", "daily"], default="weekly",
+                       help="weekly: submit only on the first session of the week; daily: any trading session")
+    paper.add_argument("--force", action="store_true", help="submit even if today is not a rebalance session")
     paper.add_argument("--equity", type=float, default=None,
                        help="dry run without paper keys: size orders for this equity (assumes no positions)")
 

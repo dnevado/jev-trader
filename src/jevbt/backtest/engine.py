@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from jevbt.features.technical import compute_technical, features_asof
+from jevbt.features.technical import compute_technical
 from jevbt.strategy import Strategy
 
 
@@ -72,6 +72,7 @@ def run_backtest(
     stop_rearm: bool = False,
     stop_cooldown_weeks: int = 0,
     max_gross: float | None = None,
+    rebalance: str = "weekly",
 ) -> BacktestResult:
     """`liquidate_at_end` closes every open position at the last session's close (with costs),
     so a window's result and round trips are complete (used by walk-forward test windows).
@@ -98,7 +99,10 @@ def run_backtest(
 
     max_gross — cap on gross exposure (sum of |weights|, e.g. 1.0 = no leverage) at each rebalance: if held
     positions plus new entries would exceed it, the new entries (and flips) are scaled down proportionally.
-    Held positions are never trimmed (no resizing), so exposure can drift above the cap with price moves."""
+    Held positions are never trimmed (no resizing), so exposure can drift above the cap with price moves.
+
+    rebalance — "weekly" (first session of each week, the default) or "daily" (every session). Either way decisions
+    use data up to the previous session and orders fill at the session's open."""
     start, end = pd.Timestamp(start), pd.Timestamp(end)
     features = {tk: compute_technical(df) for tk, df in prices.items()}
     calendar = pd.DatetimeIndex(sorted(set().union(*(df.index for df in prices.values()))))
@@ -106,7 +110,12 @@ def run_backtest(
     if calendar.empty:
         raise ValueError("no sessions in the backtest range")
     closes = pd.DataFrame({tk: df["close"] for tk, df in prices.items()}).sort_index().ffill()
-    rebalances = set(rebalance_dates(calendar))
+    if rebalance not in ("weekly", "daily"):
+        raise ValueError(f"rebalance must be weekly or daily, not {rebalance!r}")
+    rebalances = set(calendar) if rebalance == "daily" else set(rebalance_dates(calendar))
+    # Row position of each session per ticker: the previous row (data ≤ t-1) is an O(1) lookup, which keeps
+    # daily rebalancing fast (same result as features_asof).
+    positions_of = {tk: {d: i for i, d in enumerate(f.index)} for tk, f in features.items()}
     global_exits = {"trailing_stop": trailing_stop, "take_profit": take_profit, "trailing_stop_atr": trailing_stop_atr,
                     "stop_rearm": stop_rearm, "stop_cooldown_weeks": stop_cooldown_weeks}
     exit_hook = getattr(strategy, "position_exits", None)
@@ -227,10 +236,10 @@ def run_backtest(
                 for tk, df in prices.items():
                     if d not in df.index:
                         continue
-                    try:
-                        technical = features_asof(features[tk], d)
-                    except ValueError:
-                        continue
+                    pos = positions_of[tk][d]
+                    if pos == 0:
+                        continue  # no data before t
+                    technical = features[tk].iloc[pos - 1]
                     price = marks[tk]
                     current_w = shares[tk] * price / eq_open if eq_open > 0 else 0.0
                     target_w, record = strategy.target(tk, d, technical, current_w)
