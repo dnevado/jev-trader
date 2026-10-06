@@ -7,6 +7,8 @@ name = "jevbt"
 version = "0.1.0"
 description = "Backtesting of trading strategies with technical indicators, LLM fundamentals and Jev decisions"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "David Nevado Martín" }]
 
 [tool.setuptools.packages.find]
 where = ["src"]
