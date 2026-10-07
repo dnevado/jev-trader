@@ -1,8 +1,10 @@
 """Forward paper trading: turn this week's strategy targets into orders on an Alpaca PAPER account.
 
 Same decision path as the backtest: indicators from daily bars up to the previous session (features_asof),
-the same Strategy.target, the same gross-exposure cap (engine.apply_gross_cap), and market-on-open orders
-("opg", like the backtest's execution at the next open). Dry run by default: orders are only printed and
+the same Strategy.target, the same gross-exposure cap (engine.apply_gross_cap), and market orders submitted
+before the open with time_in_force "day": they execute at the first trade after 09:30 New York, i.e. at the open
+like the backtest. ("opg" auction orders are supported but Alpaca's paper environment does not simulate the
+opening auction: they often expire unfilled right after the open — seen on 2026-10-07.) Dry run by default: orders are only printed and
 logged unless `submit=True`. Whole shares only (Alpaca does not short fractional shares); a long ↔ short flip
 is sent as a close order followed by an open order. Every run is logged to data/paper/<timestamp>.json.
 """
@@ -80,7 +82,7 @@ def first_session_of_week(sessions: list[str], today: date) -> bool:
 
 
 def run_paper(settings: Settings, tickers: list[str], strategy: Strategy, max_gross: float | None = 1.0,
-              submit: bool = False, time_in_force: str = "opg", force: bool = False, equity: float | None = None,
+              submit: bool = False, time_in_force: str = "day", force: bool = False, equity: float | None = None,
               today: date | None = None, broker: AlpacaPaperBroker | None = None,
               prices_client: AlpacaClient | None = None, rebalance: str = "weekly") -> dict:
     """One paper-trading step. `rebalance="weekly"` only submits on the first session of the week (like the

@@ -3,7 +3,7 @@
 Container entry point: `python -m jevbt.aws_job trade|report` (exit code 1 on failure). `handler(event, context)`
 also works as a Lambda handler. Two scheduled modes, Monday–Friday (America/New_York):
   {"mode": "trade"}  09:00 — on every trading session (JEVBT_REBALANCE=daily) or only on the first session of the
-                     week (weekly): compute targets and submit market-on-open orders (paper.run_paper), store the run
+                     week (weekly): compute targets and submit market orders for the open (paper.run_paper), store the run
                      log in S3, email the submitted orders. "No orders" is emailed only on the first session of the
                      week (a weekly heartbeat), so daily mode does not send an empty email every day.
   {"mode": "report"} 10:00 — after the open: email today's jevbt fills (positions opened / closed) and any order
@@ -119,7 +119,7 @@ def trade(deps: Deps) -> dict:
     tickers = [t.strip().upper() for t in _env("JEVBT_TICKERS").split(",") if t.strip()]
     max_gross = float(_env("JEVBT_MAX_GROSS", "1.0"))
     run = deps.run_paper(settings, tickers, build_strategy(), max_gross=max_gross, submit=True,
-                         time_in_force=_env("JEVBT_TIF", "opg"), broker=broker, today=today, rebalance=rebalance)
+                         time_in_force=_env("JEVBT_TIF", "day"), broker=broker, today=today, rebalance=rebalance)
     log_uri = deps.upload(Path(run["log_path"]))
     orders = run["orders"]
     if not orders and not first_of_week:
@@ -128,7 +128,9 @@ def trade(deps: Deps) -> dict:
              f"Account equity: {run['equity']:,.2f} USD | universe: {len(tickers)} stocks | max gross {max_gross:.0%}",
              f"Open positions before: {len(run['positions_before'])}", ""]
     if orders:
-        lines.append("Orders submitted for today's open (market-on-open):")
+        tif = _env("JEVBT_TIF", "day")
+        lines.append("Orders submitted for today's open (" + ("market-on-open auction" if tif == "opg"
+                     else "market orders, execute at the 09:30 open") + "):")
         for o in orders:
             lines.append(f"  {o['side'].upper():4} {o['qty']:>6} {o['ticker']:<6} ({o['reason']}, ref close "
                          f"{o['ref_price']:.2f})  status: {o['status']}")

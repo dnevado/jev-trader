@@ -181,8 +181,10 @@ test). No LLM / Jev in the live strategy.
 
 Live configuration (paper account, daily):
 - Universe: 50 US stocks across all 11 sectors (list in `infra/terraform/terraform.tfvars.example`), long only,
-  `max_alloc` 1/12, `max_gross` 1.0, **daily** rebalance (`rebalance = "daily"`, image `v2`), market-on-open orders
-  (`opg`), whole shares. The account started flat (positions open only on full entry signals; the backtest would
+  `max_alloc` 1/12, `max_gross` 1.0, **daily** rebalance (`rebalance = "daily"`), image `v3`, market orders with
+  `time_in_force = "day"` sent at 09:00 New York (they execute at the 09:30 open), whole shares. `opg` (opening
+  auction) was used until 2026-10-07: Alpaca's paper environment does not simulate the auction, and the first entry
+  (BUY 15 MSFT) expired unfilled at 09:32 → switched to `day`. The account started flat (positions open only on full entry signals; the backtest would
   already hold ~18 names).
 - Runs on AWS account **291573578422** (eu-central-1, Terraform workspace `mgmt`, state in S3 bucket
   `jevbt-tfstate-291573578422-eu-central-1`): EventBridge Scheduler → ECS Fargate task `python -m jevbt.aws_job`

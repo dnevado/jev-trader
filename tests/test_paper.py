@@ -117,7 +117,7 @@ def test_submit_posts_market_on_open_orders(settings):
     posts = [c for c in session.calls if c[0] == "POST"]
     assert len(posts) == 1
     body = posts[0][2]
-    assert body["side"] == "buy" and body["type"] == "market" and body["time_in_force"] == "opg"
+    assert body["side"] == "buy" and body["type"] == "market" and body["time_in_force"] == "day"
     assert int(body["qty"]) == run["orders"][0]["qty"] > 0
     assert run["orders"][0]["status"] == "accepted"
 

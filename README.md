@@ -82,7 +82,8 @@ confident trend, stay in cash otherwise.**
 
 - **Exit** with hysteresis (a lower bar than entry): the trend breaks (price below the 200-day average with negative
   3-month momentum) or the 200-day average turns down. No stop-losses — they hurt in every test.
-- **Sizing**: 1/12 of equity per position, gross exposure capped at 100%. Daily rebalancing, market-on-open orders.
+- **Sizing**: 1/12 of equity per position, gross exposure capped at 100%. Daily rebalancing; market orders sent
+  before the open that execute at the 09:30 open.
 - **Universe**: 50 US stocks across all 11 sectors, chosen by rule rather than past performance.
 - Thresholds are round numbers fixed *before* testing and are not tuned on historical data — forward paper trading
   is the real test.
@@ -178,7 +179,9 @@ than Alpaca's paper endpoint, and nothing is sent without `--submit`.
 .venv\Scripts\python -m jevbt paper --tickers AMD NKE XOM KO --rebalance daily --submit     # sends them to the paper account
 ```
 
-Orders are whole-share, market-on-open (`opg`, submit before 09:28 New York time); shorts are only sent for
+Orders are whole-share market orders with `time_in_force=day`, sent before the open so they execute at the open
+(`--tif opg` targets the opening auction, but Alpaca's paper environment does not simulate it and such orders often
+expire unfilled); shorts are only sent for
 shortable, easy-to-borrow stocks; every run is logged to `data/paper/`.
 
 ## Cloud deployment (AWS + Terraform)
@@ -186,7 +189,7 @@ shortable, easy-to-borrow stocks; every run is logged to `data/paper/`.
 `infra/terraform/` deploys the paper-trading job as a scheduled container:
 
 - **EventBridge Scheduler** (Mon–Fri, America/New_York) starts an **ECS Fargate** task:
-  09:00 `trade` (signals + market-on-open orders) and 10:00 `report` (fills).
+  09:00 `trade` (signals + orders for the open) and 10:00 `report` (fills).
 - **SNS email**: orders submitted, positions opened/closed, unfilled orders, errors — Alpaca does not email
   paper-account fills, so notifications are built in. A weekly "no orders" summary confirms the job is alive.
 - **Security & safety**: least-privilege IAM roles, API keys in SSM SecureString (never in Terraform state),

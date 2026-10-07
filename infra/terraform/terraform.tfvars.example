@@ -4,7 +4,8 @@ account_id         = "123456789012"
 aws_region         = "eu-central-1"
 notification_email = "me@example.com"
 rebalance          = "daily" # or "weekly"
-image_tag          = "v2"
+time_in_force      = "day"   # or "opg" (opening auction; not simulated by Alpaca paper)
+image_tag          = "v3"
 tickers = [
   "AMD", "AMZN", "AAPL", "MSFT", "NVDA", "JPM", "COST", "AAL", "CHTR", "PYPL",
   "ALGN", "LULU", "NKE", "APTV", "FIS", "XYZ", "CSGP", "BAX", "KO", "PG",

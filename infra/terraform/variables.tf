@@ -66,6 +66,16 @@ variable "direction" {
   }
 }
 
+variable "time_in_force" {
+  description = "Order time in force: day (market order sent pre-market, executes at the open) or opg (opening auction only; Alpaca paper does not simulate the auction, so opg orders often expire)."
+  type        = string
+  default     = "day"
+  validation {
+    condition     = contains(["day", "opg"], var.time_in_force)
+    error_message = "time_in_force must be day or opg."
+  }
+}
+
 variable "rebalance" {
   description = "weekly (trade on the first session of the week) or daily (every session)."
   type        = string

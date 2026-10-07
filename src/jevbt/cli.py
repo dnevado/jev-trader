@@ -368,8 +368,9 @@ def main(argv: list[str] | None = None) -> int:
     paper.add_argument("--max-gross", type=float, default=1.0, help="cap on gross exposure (default 1.0)")
     paper.add_argument("--vol-sizing", action="store_true")
     paper.add_argument("--submit", action="store_true", help="send the orders to the paper account")
-    paper.add_argument("--tif", choices=["opg", "day"], default="opg",
-                       help="opg = market-on-open (submit before 09:28 ET, like the backtest); day = now")
+    paper.add_argument("--tif", choices=["day", "opg"], default="day",
+                       help="day = market order, executes at the open when sent pre-market (default); opg = opening "
+                            "auction only (Alpaca paper does not simulate the auction: opg orders often expire)")
     paper.add_argument("--rebalance", choices=["weekly", "daily"], default="weekly",
                        help="weekly: submit only on the first session of the week; daily: any trading session")
     paper.add_argument("--force", action="store_true", help="submit even if today is not a rebalance session")

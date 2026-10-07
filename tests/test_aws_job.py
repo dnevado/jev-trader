@@ -65,7 +65,7 @@ def test_trade_submits_on_first_session_and_emails_orders():
     out = handler({"mode": "trade"}, None, deps)
     tickers, strategy, kw = calls[0]
     assert tickers == ["XOM", "NKE", "KO"]
-    assert kw["submit"] is True and kw["time_in_force"] == "opg" and kw["today"] == MONDAY
+    assert kw["submit"] is True and kw["time_in_force"] == "day" and kw["today"] == MONDAY
     assert strategy.name == "trend" and strategy.direction == "long"
     assert out["orders"] == 1 and out["log"] == "s3://bucket/paper/run.json"
     subject, body = sent[0]
